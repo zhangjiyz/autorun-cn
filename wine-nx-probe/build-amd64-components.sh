@@ -11,6 +11,9 @@ fi
 if [ -n "${WINE_NX_LLVM_MINGW:-}" ]; then
     export PATH="$WINE_NX_LLVM_MINGW/bin:$PATH"
 fi
+if [ -x /opt/homebrew/opt/bison/bin/bison ]; then
+    export PATH="/opt/homebrew/opt/bison/bin:$PATH"
+fi
 for tool in arm64ec-w64-mingw32-clang aarch64-w64-mingw32-clang i686-w64-mingw32-clang x86_64-w64-mingw32-clang x86_64-w64-mingw32-windres llvm-readobj; do
     command -v "$tool" >/dev/null || { echo "Missing $tool; set WINE_NX_LLVM_MINGW." >&2; exit 1; }
 done

@@ -530,7 +530,7 @@ HRESULT mouse_create_device( struct dinput *dinput, const GUID *guid, IDirectInp
     impl->base.caps.dwFirmwareRevision = 100;
     impl->base.caps.dwHardwareRevision = 100;
     impl->base.dwCoopLevel = DISCL_NONEXCLUSIVE | DISCL_BACKGROUND;
-    if (dinput->dwVersion >= 0x0800) impl->base.use_raw_input = TRUE;
+    impl->base.use_raw_input = dinput_use_raw_input( dinput->dwVersion );
 
     if (FAILED(hr = dinput_device_init_device_format( &impl->base.IDirectInputDevice8W_iface ))) goto failed;
     mouse_enum_objects( &impl->base.IDirectInputDevice8W_iface, &filter, DIDFT_AXIS, init_object_properties, NULL );

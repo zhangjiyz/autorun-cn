@@ -122,11 +122,11 @@ static inline int launcher_keys_path( const char *exe_path, char *out, size_t si
     return launcher_sibling_path( exe_path, ".keys.txt", out, size );
 }
 
-/* The command line for a program with its own arguments; a path with spaces is quoted. */
+/* Always quote argv[0], including paths without spaces. Some older programs
+ * parse GetCommandLineA themselves and assume the executable is quoted. */
 static inline int launcher_command_line( const char *dos, const char *args, char *out, size_t size )
 {
-    const char *quote = strchr( dos, ' ' ) ? "\"" : "";
-    int len = snprintf( out, size, "%s%s%s %s", quote, dos, quote, args );
+    int len = snprintf( out, size, "\"%s\" %s", dos, args );
 
     return len > 0 && (size_t)len < size;
 }

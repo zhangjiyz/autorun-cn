@@ -45,6 +45,14 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(dinput);
 
+BOOL dinput_use_raw_input( DWORD version )
+{
+    char flag[2];
+
+    if (version >= 0x0800) return TRUE;
+    return GetEnvironmentVariableA( "WINE_NX_RAW_INPUT", flag, sizeof(flag) ) == 1 && flag[0] == '1';
+}
+
 #define INPUT_THREAD_NOTIFY     (WM_USER + 0x10)
 #define NOTIFY_THREAD_STOP      0
 #define NOTIFY_REFRESH_DEVICES  1

@@ -12,6 +12,7 @@
 
 #include "launcher_svg.h"
 #include "launcher_ui.h"
+#include "launcher_zh_cn.h"
 
 #define FADE_MS          160
 #define REPEAT_DELAY_MS  360
@@ -566,11 +567,28 @@ static struct ui_text_entry *text_entry( struct ui *ui, TTF_Font *font, const ch
     return oldest;
 }
 
+const char *ui_translate( const char *text )
+{
+    size_t low = 0, high = sizeof(launcher_zh_cn) / sizeof(launcher_zh_cn[0]);
+
+    if (!text) return "";
+    while (low < high)
+    {
+        size_t mid = low + (high - low) / 2;
+        int order = strcmp( text, launcher_zh_cn[mid].english );
+        if (!order) return launcher_zh_cn[mid].chinese;
+        if (order < 0) high = mid;
+        else low = mid + 1;
+    }
+    return text;
+}
+
 int ui_text_width( struct ui *ui, TTF_Font *font, const char *text )
 {
     struct ui_text_entry *entry;
     int w = 0, h;
 
+    text = ui_translate( text );
     if (!text[0]) return 0;
     if ((entry = text_entry( ui, font, text, ui->text, 1 ))) return entry->width;
     TTF_SizeUTF8( font, text, &w, &h );
@@ -582,6 +600,7 @@ void ui_text( struct ui *ui, TTF_Font *font, int x, int y, const char *text, SDL
     struct ui_text_entry *entry;
     SDL_Surface *surface;
 
+    text = ui_translate( text );
     if (!text[0]) return;
     if ((entry = text_entry( ui, font, text, color, 0 )))
     {
@@ -610,6 +629,7 @@ void ui_text_opening( struct ui *ui, TTF_Font *font, int x, int y, const char *t
     SDL_Rect clip, dst, previous;
     SDL_bool clipped;
 
+    text = ui_translate( text );
     if (open <= 0.01f || !text[0]) return;
     if (open >= 0.99f || !(entry = text_entry( ui, font, text, color, 0 )))
     {
@@ -664,6 +684,7 @@ static const char *ellipsis( TTF_Font *font )
 void ui_text_fit( struct ui *ui, TTF_Font *font, int x, int y, int max_width, const char *text,
                   SDL_Color color, int scroll )
 {
+    text = ui_translate( text );
     int width = ui_text_width( ui, font, text );
     char cut[UI_TEXT_KEY];
     size_t bytes;
@@ -687,6 +708,7 @@ void ui_text_fit( struct ui *ui, TTF_Font *font, int x, int y, int max_width, co
     }
     bytes = fitting_bytes( font, text, max_width - ui_text_width( ui, font, ellipsis( font ) ) );
     if (bytes > sizeof(cut) - 4) bytes = sizeof(cut) - 4;
+    while (bytes && ((unsigned char)text[bytes] & 0xc0) == 0x80) bytes--;
     while (bytes && text[bytes - 1] == ' ') bytes--;
     memcpy( cut, text, bytes );
     strcpy( cut + bytes, ellipsis( font ) );
@@ -701,12 +723,17 @@ static int wrap_text( struct ui *ui, TTF_Font *font, int x, int y, int max_width
     int lines = 0, line_height = TTF_FontHeight( font ) + 4;
     char line[UI_TEXT_KEY];
 
+    text = ui_translate( text );
     while (*text && lines < max_lines)
     {
         const char *newline = strchr( text, '\n' );
         size_t len = newline ? (size_t)(newline - text) : strlen( text ), bytes;
 
-        if (len >= sizeof(line)) len = sizeof(line) - 1;
+        if (len >= sizeof(line))
+        {
+            len = sizeof(line) - 1;
+            while (len && ((unsigned char)text[len] & 0xc0) == 0x80) len--;
+        }
         memcpy( line, text, len );
         line[len] = 0;
         bytes = fitting_bytes( font, line, max_width );

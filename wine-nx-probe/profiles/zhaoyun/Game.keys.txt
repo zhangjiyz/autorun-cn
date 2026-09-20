@@ -1,0 +1,35 @@
+# Three Kingdoms: Zhao Yun (2001) - controls for Game.exe only.
+# Put this next to Game.exe and enable own-controls for this game.
+LSTICK=keys
+LUP=0x26
+LDOWN=0x28
+LLEFT=0x25
+LRIGHT=0x27
+RSTICK=keys
+RUP=0x53
+RDOWN=0x00
+RLEFT=0x41
+RRIGHT=0x44
+DPAD=keys
+TOUCH=mouse
+
+# D-pad up/down/left/right: item shortcuts 1-4.
+UP=0x31
+DOWN=0x32
+LEFT=0x33
+RIGHT=0x34
+# Switch L/ZL/R/ZR: item shortcuts 5-8.
+L=0x35
+ZL=0x36
+R=0x37
+ZR=0x38
+
+# Main actions. Touch provides the left mouse button and drag.
+A=0x20
+B=0x101
+X=0x11
+Y=0x43
+MINUS=0x1b
+PLUS=0x09
+STICKL=0x10
+STICKR=0x00

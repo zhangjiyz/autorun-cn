@@ -2,7 +2,7 @@
  * The controls a Switch has, and the keys they can be made to send.
  *
  * keys.txt is a NAME=code line for each control, where code is a Windows
- * virtual-key code; the launcher's Controls screen writes those lines, so it
+ * virtual-key code or 0x100/0x101 for a mouse button. The Controls screen writes those lines, so it
  * needs the same names the runtime reads and a readable name for each code to
  * put on the screen. A code with no name here is shown as its number, which is
  * what a hand-written file may hold.
@@ -12,6 +12,7 @@
 
 #include <stddef.h>
 #include <stdio.h>
+#include "wine/nx_input_codes.h"
 
 struct wine_nx_control
 {
@@ -94,6 +95,8 @@ struct wine_nx_key_name
 static const struct wine_nx_key_name wine_nx_key_names[] =
 {
     { 0x00, "Nothing" },
+    { WINE_NX_MOUSE_LEFT, "Left mouse button" },
+    { WINE_NX_MOUSE_RIGHT, "Right mouse button" },
     { 0x0d, "Enter" },       { 0x20, "Space" },        { 0x1b, "Escape" },
     { 0x09, "Tab" },         { 0x08, "Backspace" },
     { 0x10, "Shift" },       { 0x11, "Control" },      { 0x12, "Alt" },
@@ -110,7 +113,7 @@ static const struct wine_nx_key_name wine_nx_key_names[] =
     { 0x70, "F1" },  { 0x71, "F2" },  { 0x72, "F3" },  { 0x73, "F4" },
     { 0x74, "F5" },  { 0x75, "F6" },  { 0x76, "F7" },  { 0x77, "F8" },
     { 0x78, "F9" },  { 0x79, "F10" }, { 0x7a, "F11" }, { 0x7b, "F12" },
-    { 0x2d, "Insert" },   { 0x2e, "Delete" },    { 0x24, "Home" },
+    { 0x2d, "Insert" },   { 0x2e, "Delete" },    { 0x24, "Home key" },
     { 0x23, "End" },      { 0x21, "Page up" },   { 0x22, "Page down" },
     { 0x14, "Caps lock" }, { 0x2c, "Print screen" }, { 0x13, "Pause" },
     { 0x60, "Numpad 0" }, { 0x61, "Numpad 1" }, { 0x62, "Numpad 2" },

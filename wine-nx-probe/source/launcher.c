@@ -249,7 +249,7 @@ int launcher_platform_font( const void **data, size_t *size )
 
     if (R_FAILED( plInitialize( PlServiceType_User ) )) return 0;
     font_service = 1;
-    if (R_FAILED( plGetSharedFontByType( &font, PlSharedFontType_Standard ) ) || !font.address) return 0;
+    if (R_FAILED( plGetSharedFontByType( &font, PlSharedFontType_ChineseSimplified ) ) || !font.address) return 0;
     *data = font.address;
     *size = font.size;
     return 1;
@@ -300,8 +300,8 @@ int launcher_platform_prompt( const char *header, const char *initial, char *out
 
     if (R_FAILED( swkbdCreate( &keyboard, 0 ) )) return 0;
     swkbdConfigMakePresetDefault( &keyboard );
-    swkbdConfigSetHeaderText( &keyboard, header );
-    swkbdConfigSetGuideText( &keyboard, header );
+    swkbdConfigSetHeaderText( &keyboard, ui_translate( header ) );
+    swkbdConfigSetGuideText( &keyboard, ui_translate( header ) );
     swkbdConfigSetInitialText( &keyboard, initial );
     swkbdConfigSetStringLenMax( &keyboard, size - 1 < 500 ? size - 1 : 500 );
     rc = swkbdShow( &keyboard, out, size );
@@ -520,7 +520,7 @@ static void draw_loading( struct launcher *l, int found )
     ui_background( ui );
     ui_header( ui, "Library", NULL );
     ui_text_centered( ui, ui->large, ui->width / 2, ui->height / 2 - 48, "Looking for programs...", ui->value );
-    snprintf( text, sizeof(text), found == 1 ? "%d program found" : "%d programs found", found );
+    snprintf( text, sizeof(text), "找到 %d 个程序", found );
     ui_text_centered( ui, ui->small, ui->width / 2, ui->height / 2 + 20, text, ui->dim );
     ui_present( ui );
 }
@@ -1690,12 +1690,11 @@ static int confirm_forwarder( struct launcher *l, int bits )
     char message[320];
 
     snprintf( message, sizeof(message),
-              "A %d-bit forwarder is installed as an application. Consoles have been banned for homebrew "
-              "in that list.\n\nUse emuMMC only. %s",
+              "%d 位转发器将作为应用安装。使用主机菜单中的自制程序可能导致主机被封禁。\n\n请仅在 emuMMC 中使用。%s",
               bits,
-              l->options->emummc > 0 ? "This console is on emuMMC." :
-              l->options->emummc == 0 ? "This console is NOT on emuMMC." :
-              "Atmosphere did not say which this console is on." );
+              ui_translate( l->options->emummc > 0 ? "This console is on emuMMC." :
+                            l->options->emummc == 0 ? "This console is NOT on emuMMC." :
+                            "Atmosphere did not say which this console is on." ) );
     return ui_confirm( ui, "Install forwarder", message, "Install" );
 }
 
@@ -1724,8 +1723,8 @@ static int install_forwarder( struct launcher *l, int bits, unsigned long long *
     ui_start_screen( ui );
     if (rc)
     {
-        snprintf( message, sizeof(message), "The console refused while %s.\n\nResult 0x%X.",
-                  step ? step : "working", rc );
+        snprintf( message, sizeof(message), "执行%s时主机拒绝了操作。\n\n结果代码：0x%X。",
+                  ui_translate( step ? step : "working" ), rc );
         ui_message( ui, "Could not install", message );
         ui_start_screen( ui );
         return 0;
@@ -1748,7 +1747,8 @@ static void make_forwarder( struct launcher *l, int bits )
     char message[192];
 
     if (!install_forwarder( l, bits, &id )) return;
-    snprintf( message, sizeof(message), "%s is on the home menu.", bits == 32 ? "Autorun 32-bit" : "Autorun" );
+    snprintf( message, sizeof(message), "%s 已安装到 HOME 菜单。",
+              ui_translate( bits == 32 ? "Autorun 32-bit" : "Autorun" ) );
     ui_message( ui, "Installed", message );
     ui_start_screen( ui );
 }
@@ -1825,7 +1825,7 @@ static void download_artwork( struct launcher *l, struct program *p )
     p->square_icon = p->hero_icon = NULL;
     p->square_state = p->hero_state = ICON_UNKNOWN;
     save_library( l );
-    snprintf( message, sizeof(message), "Downloaded the highest-rated square, portrait and hero artwork for %s.", matched );
+    snprintf( message, sizeof(message), "已为 %s 下载评分最高的方形、竖版和横幅图片。", matched );
     ui_message( &l->ui, "Artwork downloaded", message );
 }
 
@@ -1833,7 +1833,7 @@ static void download_artwork( struct launcher *l, struct program *p )
 static const char *state_text( int state, int global, const char *on, const char *off, char *buffer, size_t size )
 {
     if (state >= 0) return state ? on : off;
-    snprintf( buffer, size, "Global (%s)", global ? on : off );
+    snprintf( buffer, size, "全局（%s）", ui_translate( global ? on : off ) );
     return buffer;
 }
 
@@ -1894,7 +1894,7 @@ static int start_program( struct launcher *l, struct program *p, char *target, s
     }
     if (!address_space_fits( l, p ))
     {
-        char message[320], name[128] = "";
+        char message[512], name[128] = "";
         int installed = 0;
         unsigned long long id = chosen_forwarder( l, name, sizeof(name), &installed );
 
@@ -1903,9 +1903,9 @@ static int start_program( struct launcher *l, struct program *p, char *target, s
         if (!id || !installed || !l->options->launch_title)
         {
             snprintf( message, sizeof(message),
-                      "%s%s needs the low 4 GB of memory. Autorun is running with %d bits, which begins "
-                      "above it.\n\nA 32-bit forwarder starts Autorun where the game fits.",
-                      id && !installed ? "The 32-bit forwarder is gone. " : "", p->title,
+                      "%s%s 需要低 4 GB 地址空间。Autorun 当前使用 %d 位地址空间，起始地址高于此范围。\n\n"
+                      "32 位转发器可在游戏所需的地址空间启动 Autorun。",
+                      id && !installed ? "32 位转发器已失效。" : "", p->title,
                       l->options->address_space_bits );
             if (!l->options->install_forwarder || !l->options->launch_title)
             {
@@ -1936,7 +1936,7 @@ static int start_program( struct launcher *l, struct program *p, char *target, s
             return 0;
         }
         remove( path );
-        snprintf( message, sizeof(message), "The console refused to open %s.", name[0] ? name : "the forwarder" );
+        snprintf( message, sizeof(message), "主机拒绝打开 %s。", name[0] ? name : "转发器" );
         ui_message( ui, "Could not open it", message );
         return 0;
     }
@@ -1945,7 +1945,7 @@ static int start_program( struct launcher *l, struct program *p, char *target, s
     save_library( l );
 
     /* The last frame before Wine starts; the screen stays dark until it shows a window. */
-    snprintf( text, sizeof(text), "Starting %s", p->title );
+    snprintf( text, sizeof(text), "正在启动 %s", p->title );
     ui_background( ui );
     ui_header( ui, "Library", p->dos );
     ui_text_fit( ui, ui->large, (ui->width - (ui_text_width( ui, ui->large, text ) < ui->width - 120 ?
@@ -1995,7 +1995,7 @@ static void dxvk_install_progress( void *opaque, enum dxvk_progress_stage stage,
     case DXVK_PROGRESS_VERIFY: status = "Verifying download..."; current = total = 0; break;
     default: status = "Installing x86 and x64 files..."; current = total = 0; break;
     }
-    snprintf( title, sizeof(title), "Installing %s %s", progress->name, progress->release->version );
+    snprintf( title, sizeof(title), "正在安装 %s %s", progress->name, progress->release->version );
     ui_progress_update( progress->ui, title, status, current, total );
     progress->stage = stage;
     progress->last_draw = now;
@@ -2025,7 +2025,7 @@ static int graphics_release_menu( struct launcher *l, struct program *p, const s
         int ids[DXVK_MAX_RELEASES + 1];
         int release_count = 0, count = 0, cached = 0, latest = -1, current = -1, chosen, i;
 
-        snprintf( message, sizeof(message), "%s %s releases...", refresh ? "Refreshing" : "Loading", name );
+        snprintf( message, sizeof(message), "正在%s %s 发布版本…", refresh ? "刷新" : "加载", name );
         ui_toast( &l->ui, message, 15000 );
         ui_present( &l->ui );
         result = catalog( l->options->runtime_dir, releases, DXVK_MAX_RELEASES,
@@ -2056,7 +2056,7 @@ static int graphics_release_menu( struct launcher *l, struct program *p, const s
             snprintf( rows[index].label, sizeof(rows[index].label), "%s", releases[i].version );
             if (installed)
                 snprintf( rows[index].value, sizeof(rows[index].value), "%s%s",
-                          i == latest ? "Latest / " : "", "Installed" );
+                          i == latest ? "最新 / " : "", "已安装" );
             else if (i == latest)
                 snprintf( rows[index].value, sizeof(rows[index].value), "Latest" );
             else if (releases[i].prerelease)
@@ -2084,11 +2084,11 @@ static int graphics_release_menu( struct launcher *l, struct program *p, const s
 
             if (releases[i].size)
                 snprintf( message, sizeof(message),
-                          "Download %s %s (%.1f MiB) from the official GitHub release and install its x86 and x64 DLLs?",
+                          "从 GitHub 官方发布版本下载 %s %s（%.1f MiB）并安装其 x86 和 x64 DLL？",
                           name, releases[i].version, releases[i].size / 1048576.0 );
             else
                 snprintf( message, sizeof(message),
-                          "Download %s %s from the official GitHub release and install its x86 and x64 DLLs?",
+                          "从 GitHub 官方发布版本下载 %s %s 并安装其 x86 和 x64 DLL？",
                           name, releases[i].version );
             if (!ui_confirm( &l->ui, name, message, "Download" )) continue;
             memset( &progress, 0, sizeof(progress) );
@@ -2111,7 +2111,7 @@ static int graphics_release_menu( struct launcher *l, struct program *p, const s
         else memcpy( version, releases[i].version, strlen( releases[i].version ) + 1 );
         p->settings.dxvk = 1;
         save_program_settings( l, p );
-        snprintf( message, sizeof(message), "%s %s selected", name, releases[i].version );
+        snprintf( message, sizeof(message), "已选择 %s %s", name, releases[i].version );
         ui_toast( &l->ui, message, 1800 );
         return 1;
     }
@@ -2139,7 +2139,7 @@ static void box64_options_status( const char *path, char *value, size_t size )
         return;
     }
     count = box64_configured_count( &kv, 0 ) + box64_configured_count( &kv, 1 );
-    if (count) snprintf( value, size, "%d flag%s set", count, count == 1 ? "" : "s" );
+    if (count) snprintf( value, size, "已设置 %d 个选项", count );
     else if (file_exists( path )) snprintf( value, size, "Custom file" );
     else snprintf( value, size, "Default" );
 }
@@ -2162,7 +2162,7 @@ static int box64_option_value( const struct launcher_kv *kv, const struct nx_box
         char invalid[64];
 
         snprintf( invalid, sizeof(invalid), "%s", text );
-        snprintf( text, size, "Unsupported (%s)", invalid );
+        snprintf( text, size, "不支持（%s）", invalid );
         return -1;
     }
     snprintf( text, size, "%s", option->value_names[choice] );
@@ -2216,7 +2216,7 @@ static void box64_options_menu( struct launcher *l, struct program *p )
         set = box64_configured_count( &kv, 1 );
         ids[count] = -1;
         snprintf( rows[count].label, sizeof(rows[count].label), "Advanced flags" );
-        snprintf( rows[count].value, sizeof(rows[count].value), expanded ? "Hide (%d set)" : "Show (%d set)", set );
+        snprintf( rows[count].value, sizeof(rows[count].value), expanded ? "收起（已设置 %d 项）" : "展开（已设置 %d 项）", set );
         rows[count].help = "Compatibility and lower-level DynaRec controls supported by Wine-NX's embedded Box64 backend.";
         rows[count].kind = UI_ROW_DROPDOWN;
         rows[count].on = expanded;
@@ -2403,7 +2403,7 @@ static int program_menu( struct launcher *l, struct program *p, char *target, si
             if (p->settings.dxvk_version[0])
                 snprintf( row->value, sizeof(row->value), "%s", p->settings.dxvk_version );
             else if (dxvk_root[0])
-                snprintf( row->value, sizeof(row->value), "Latest (%s)", dxvk_root );
+                snprintf( row->value, sizeof(row->value), "最新（%s）", dxvk_root );
             else snprintf( row->value, sizeof(row->value), "Latest" );
             ADD_ROW( ROW_DXVK_HUD, SECTION_GRAPHICS, "DXVK HUD",
                      "FPS shows only the frame rate. Compact shows the DirectX version, FPS and frame times. "
@@ -2480,9 +2480,9 @@ static int program_menu( struct launcher *l, struct program *p, char *target, si
             if (p->settings.address_space >= 0)
                 snprintf( row->value, sizeof(row->value), "%s",
                           p->settings.address_space ? "32-bit" : "Any" );
-            else snprintf( row->value, sizeof(row->value), "Auto (%s)",
-                           needs == LAUNCHER_ADDRESS_LOW ? "32-bit" :
-                           needs == LAUNCHER_ADDRESS_ANY ? "any" : "unread" );
+            else snprintf( row->value, sizeof(row->value), "自动（%s）",
+                           needs == LAUNCHER_ADDRESS_LOW ? "32 位" :
+                           needs == LAUNCHER_ADDRESS_ANY ? "任意" : "未读取" );
         }
 
         {
@@ -2859,46 +2859,46 @@ static void save_look( struct launcher *l )
 static const struct { const char *name, *value, *help; } credits[] =
 {
     { "Wine", "WineHQ, LGPL-2.1+",
-      "https://www.winehq.org\nThe Windows API, the loader, WoW64 and the Direct3D, OpenGL and Vulkan layers." },
+      "https://www.winehq.org\n提供 Windows API、加载器、WoW64，以及 Direct3D、OpenGL 和 Vulkan 层。" },
     { "Box64", "ptitSeb, MIT",
-      "https://github.com/ptitSeb/box64\nRuns x86 and x86-64 code through its interpreter and ARM64 dynarec." },
+      "https://github.com/ptitSeb/box64\n通过解释器和 ARM64 动态重编译运行 x86 与 x86-64 代码。" },
     { "DXVK", "Philip Rebohle, zlib",
-      "https://github.com/doitsujin/dxvk\nDirect3D over Vulkan, for programs set to d3d=dxvk." },
+      "https://github.com/doitsujin/dxvk\n通过 Vulkan 运行 Direct3D，供设置为 d3d=dxvk 的程序使用。" },
     { "VKD3D-Proton", "VKD3D-Proton contributors, LGPL-2.1",
-      "https://github.com/HansKristian-Work/vkd3d-proton\nDirect3D 12 over Vulkan." },
+      "https://github.com/HansKristian-Work/vkd3d-proton\n通过 Vulkan 运行 Direct3D 12。" },
     { "Mesa", "Mesa3D, MIT",
-      "https://mesa3d.org\nOpenGL through nvc0 and Vulkan through NVK on the Switch GPU." },
+      "https://mesa3d.org\n在 Switch GPU 上通过 nvc0 提供 OpenGL、通过 NVK 提供 Vulkan。" },
     { "mesa-switch", "danfromtico, NaGaa95 and others",
-      "https://github.com/danfromtico/mesa-switch\nThe Switch port of Mesa 26, with nvc0 and NVK, that the runtime links." },
+      "https://github.com/danfromtico/mesa-switch\n运行环境链接的 Mesa 26 Switch 移植版，包含 nvc0 和 NVK。" },
     { "Switch Mesa and libdrm_nouveau", "fincs, Subv, Jules Blok, MIT",
-      "devkitPro's Switch ports of Mesa 20.1 and libdrm_nouveau, the earlier OpenGL path." },
+      "devkitPro 移植到 Switch 的 Mesa 20.1 和 libdrm_nouveau，提供早期的 OpenGL 路径。" },
     { "libnx", "switchbrew, ISC",
-      "https://github.com/switchbrew/libnx\nThe Horizon system library the runtime is written against." },
+      "https://github.com/switchbrew/libnx\n运行环境所依赖的 Horizon 系统库。" },
     { "devkitPro", "devkitA64 and portlibs",
-      "https://devkitpro.org\nThe toolchain and the Switch builds of the libraries below." },
+      "https://devkitpro.org\n工具链及下列库的 Switch 构建版本。" },
     { "SDL2 and SDL2_ttf", "Sam Lantinga, zlib",
-      "https://www.libsdl.org\nThe launcher's drawing, input and text." },
+      "https://www.libsdl.org\n提供启动器的绘图、输入和文字显示。" },
     { "FreeType", "FreeType Project, FTL",
-      "https://freetype.org\nFont rendering for the launcher." },
+      "https://freetype.org\n为启动器渲染字体。" },
     { "HarfBuzz", "HarfBuzz authors, MIT",
-      "https://harfbuzz.github.io\nText shaping for the launcher." },
+      "https://harfbuzz.github.io\n为启动器处理文字排版。" },
     { "libpng, zlib, bzip2", "libpng, zlib and BSD licenses",
-      "https://www.libpng.org  https://zlib.net  https://sourceware.org/bzip2\nProgram icons and compressed data." },
+      "https://www.libpng.org  https://zlib.net  https://sourceware.org/bzip2\n处理程序图标和压缩数据。" },
     { "llvm-mingw", "Martin Storsjo, Apache-2.0",
-      "https://github.com/mstorsjo/llvm-mingw\nBuilds Wine's and DXVK's Windows DLLs (LLVM, libc++, mingw-w64)." },
+      "https://github.com/mstorsjo/llvm-mingw\n构建 Wine 和 DXVK 的 Windows DLL（LLVM、libc++、mingw-w64）。" },
     { "7-Zip", "Igor Pavlov, LGPL-2.1",
-      "https://www.7-zip.org\n7zr.exe, the benchmark and archive test program on the card." },
+      "https://www.7-zip.org\n提供存储卡上的 7zr.exe 基准测试和压缩包测试程序。" },
     { "dolphin-nx", "NaGaa95, reference",
-      "https://github.com/NaGaa95/dolphin-nx\nA Nintendo Switch port used as a platform reference." },
+      "https://github.com/NaGaa95/dolphin-nx\n作为平台参考的 Nintendo Switch 移植项目。" },
     { "Atmosphere", "Atmosphere-NX, reference",
-      "https://github.com/Atmosphere-NX/Atmosphere\nIts kernel source is how Autorun learns what Horizon's memory calls allow." },
+      "https://github.com/Atmosphere-NX/Atmosphere\nAutorun 参考其内核源码了解 Horizon 内存调用的能力。" },
     { "tico-dolphin", "ticohq, reference",
-      "https://github.com/ticohq/tico-dolphin\nJIT and exception handling on Horizon." },
+      "https://github.com/ticohq/tico-dolphin\nHorizon 上的 JIT 与异常处理参考。" },
     { "WineBox64 NX", "Ibnuard, reference",
-      "https://github.com/Ibnuard/winebox64_nx\nA proof of concept running x86-64 Wine under Box64 on Horizon; "
-      "reference for Autorun's Box64 and libnx integration." },
+      "https://github.com/Ibnuard/winebox64_nx\n在 Horizon 上通过 Box64 运行 x86-64 Wine 的概念验证；"
+      "Autorun 集成 Box64 和 libnx 时的参考项目。" },
     { "sphaira", "ITotalJustice, NaGaa95",
-      "https://github.com/NaGaa95/sphaira\nForwarders that start Autorun with a 32-bit address space." },
+      "https://github.com/NaGaa95/sphaira\n以 32 位地址空间启动 Autorun 的转发器。" },
 };
 #define CREDIT_COUNT (sizeof(credits) / sizeof(credits[0]))
 
@@ -3024,7 +3024,7 @@ static int key_screen( struct launcher *l, const char *control_label, unsigned s
         if (wine_nx_key_names[i].code)
             snprintf( rows[i].value, sizeof(rows[i].value), "0x%02x", wine_nx_key_names[i].code );
     }
-    snprintf( title, sizeof(title), "%s sends", control_label );
+    snprintf( title, sizeof(title), "%s 发送的按键", ui_translate( control_label ) );
     list.selection = at > 0 ? at : 0;
     for (;;)
     {
@@ -3511,8 +3511,7 @@ static int file_browser_storage( struct launcher *l, char *dir, size_t size )
         snprintf( rows[0].value, sizeof(rows[0].value), "C: and Z:" );
         snprintf( rows[1].label, sizeof(rows[1].label), "USB" );
         if (mounted_count)
-            snprintf( rows[1].value, sizeof(rows[1].value), mounted_count == 1 ? "1 volume" : "%d volumes",
-                      mounted_count );
+            snprintf( rows[1].value, sizeof(rows[1].value), "%d 个磁盘", mounted_count );
         else
             snprintf( rows[1].value, sizeof(rows[1].value), "Not connected" );
 
@@ -3696,7 +3695,7 @@ static int add_game( struct launcher *l )
         char name[128];
         int answer;
 
-        snprintf( message, sizeof(message), "%s\n\n%s\n\nAdd this game to your library?",
+        snprintf( message, sizeof(message), "%s\n\n%s\n\n要把这个游戏加入游戏库吗？",
                   program.title, program.dos );
         answer = ui_ask( &l->ui, "Review Game", message, hints, 3 );
         if (answer == UI_A) break;
@@ -4056,8 +4055,7 @@ static int run_library( struct launcher *l, char *target, size_t size )
                 char message[80];
 
                 rebuild_lists( l, keep );
-                snprintf( message, sizeof(message), changed == 1 ? "%d USB game refreshed" : "%d USB games refreshed",
-                          changed );
+                snprintf( message, sizeof(message), "已刷新 %d 个 USB 游戏", changed );
                 launcher_log( "[LAUNCHER] %s after a mount change", message );
                 ui_toast( ui, message, 1800 );
             }

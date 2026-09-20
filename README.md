@@ -4,6 +4,8 @@
 
 <h1 align="center">Autorun</h1>
 
+<p align="center"><a href="README.zh-CN.md">简体中文</a></p>
+
 <p align="center">
   Play Windows PC games on your Nintendo Switch.<br>
   <sub>Previously called Wine-NX.</sub>

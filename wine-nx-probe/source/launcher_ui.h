@@ -47,7 +47,7 @@ struct ui_input
 };
 
 #define UI_TEXT_CACHE    192
-#define UI_TEXT_KEY      160
+#define UI_TEXT_KEY      256
 #define UI_FOOTER_HINTS  10
 #define UI_HEADER_HEIGHT 80
 /* Every header keeps these, so the clock and the battery do not move from one
@@ -138,6 +138,8 @@ struct ui
 
 int  ui_init( struct ui *ui, const void *font_data, size_t font_size, int animations );
 void ui_quit( struct ui *ui );
+/* Translate exact launcher text matches; unlisted display text passes through. */
+const char *ui_translate( const char *text );
 /* Why ui_init failed. */
 const char *ui_error(void);
 /* Whether SDL got as far as a window, so the screen was in EGL's hands. */

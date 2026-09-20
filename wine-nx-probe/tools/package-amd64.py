@@ -248,7 +248,7 @@ if args.vulkan:
 if not args.minimal:
     common += ('user32 win32u gdi32 imm32 ole32 oleaut32 combase coml2 rpcrt4 shell32 '
                'comdlg32 comctl32 shlwapi shcore version ws2_32 winmm mmdevapi avrt '
-               'dsound opengl32 wined3d d3d9 d3d11 dxgi dinput8 xinput1_3 xinput1_4 '
+               'dsound opengl32 wined3d ddraw d3d9 d3d11 dxgi dinput dinput8 msvfw32 xinput1_3 xinput1_4 '
                'xinput9_1_0 dbghelp windowscodecs '
                'd3dx9_38 d3dx9_43 winhttp oleacc wsock32 psapi').split()
     common += game_runtime

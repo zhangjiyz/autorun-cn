@@ -26,6 +26,7 @@
 #define WIN32_NO_STATUS
 #include "win32u_private.h"
 #include "wine/opengl_driver.h"
+#include "wine/nx_aspect_fit.h"
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(wgl);
@@ -35,6 +36,8 @@ WINE_DEFAULT_DEBUG_CHANNEL(wgl);
 extern void *wine_nx_gl_acquire_window( void );
 extern void wine_nx_gl_release_window( void );
 extern void wine_nx_runtime_trace( const char *msg ) __attribute__((weak));
+extern int wine_nx_aspect_source_width __attribute__((weak));
+extern int wine_nx_aspect_source_height __attribute__((weak));
 
 static const struct egl_platform *egl;
 static const struct opengl_funcs *funcs;
@@ -120,10 +123,130 @@ extern unsigned long long horizon_interrupt_time(void);
 unsigned int wine_nx_gl_swaps;
 unsigned long long wine_nx_gl_swap_time;  /* 100 ns */
 
+/* FBO names belong to an EGL context. Wined3D can replace its caps context
+ * with a versioned one while reusing the same screen surface. */
+struct nx_aspect_scratch
+{
+    EGLContext context;
+    GLuint texture, framebuffer;
+    int width, height;
+};
+static struct nx_aspect_scratch nx_aspect_scratch[8];
+static pthread_mutex_t nx_aspect_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static struct nx_aspect_scratch *nx_aspect_get_scratch( int width, int height )
+{
+    EGLContext context = funcs->p_eglGetCurrentContext();
+    struct nx_aspect_scratch *slot = NULL;
+    GLint old_texture, old_read, old_draw;
+    unsigned int i;
+    int complete;
+
+    if (!context) return NULL;
+    for (i = 0; i < ARRAY_SIZE(nx_aspect_scratch); i++)
+    {
+        if (nx_aspect_scratch[i].context == context) { slot = &nx_aspect_scratch[i]; break; }
+        if (!slot && !nx_aspect_scratch[i].context) slot = &nx_aspect_scratch[i];
+    }
+    if (!slot) return NULL;
+    if (slot->context == context && slot->width == width && slot->height == height &&
+        funcs->p_glIsFramebuffer( slot->framebuffer )) return slot;
+
+    /* A destroyed EGL context may reuse its address; its GL names are no
+     * longer ours, so replace the record without deleting those names. */
+    memset( slot, 0, sizeof(*slot) );
+    slot->context = context;
+    slot->width = width;
+    slot->height = height;
+    funcs->p_glGetIntegerv( GL_TEXTURE_BINDING_2D, &old_texture );
+    funcs->p_glGetIntegerv( GL_READ_FRAMEBUFFER_BINDING, &old_read );
+    funcs->p_glGetIntegerv( GL_DRAW_FRAMEBUFFER_BINDING, &old_draw );
+    funcs->p_glGenTextures( 1, &slot->texture );
+    funcs->p_glBindTexture( GL_TEXTURE_2D, slot->texture );
+    funcs->p_glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR );
+    funcs->p_glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
+    funcs->p_glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0 );
+    funcs->p_glTexImage2D( GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0,
+                           GL_RGBA, GL_UNSIGNED_BYTE, NULL );
+    funcs->p_glGenFramebuffers( 1, &slot->framebuffer );
+    funcs->p_glBindFramebuffer( GL_FRAMEBUFFER, slot->framebuffer );
+    funcs->p_glFramebufferTexture2D( GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                                     GL_TEXTURE_2D, slot->texture, 0 );
+    complete = funcs->p_glCheckFramebufferStatus( GL_FRAMEBUFFER ) == GL_FRAMEBUFFER_COMPLETE;
+    funcs->p_glBindFramebuffer( GL_READ_FRAMEBUFFER, old_read );
+    funcs->p_glBindFramebuffer( GL_DRAW_FRAMEBUFFER, old_draw );
+    funcs->p_glBindTexture( GL_TEXTURE_2D, old_texture );
+    if (complete) return slot;
+    nx_log( "[NXASPECT] OpenGL capture framebuffer incomplete" );
+    funcs->p_glDeleteFramebuffers( 1, &slot->framebuffer );
+    funcs->p_glDeleteTextures( 1, &slot->texture );
+    memset( slot, 0, sizeof(*slot) );
+    return NULL;
+}
+
+static void nx_aspect_present( int source_width, int source_height )
+{
+    struct nx_aspect_scratch *scratch;
+    struct wine_nx_aspect_rect shown;
+    GLfloat clear_color[4];
+    GLboolean mask[4], scissor;
+    GLint old_read, old_draw, old_read_buffer, old_draw_buffer;
+
+    if (!wine_nx_aspect_fit_rect( source_width, source_height, 1280, 720, &shown )) return;
+    pthread_mutex_lock( &nx_aspect_mutex );
+    if (!(scratch = nx_aspect_get_scratch( shown.width, shown.height )))
+    {
+        pthread_mutex_unlock( &nx_aspect_mutex );
+        return;
+    }
+    funcs->p_glGetIntegerv( GL_READ_FRAMEBUFFER_BINDING, &old_read );
+    funcs->p_glGetIntegerv( GL_DRAW_FRAMEBUFFER_BINDING, &old_draw );
+    funcs->p_glGetIntegerv( GL_READ_BUFFER, &old_read_buffer );
+    funcs->p_glGetIntegerv( GL_DRAW_BUFFER, &old_draw_buffer );
+    funcs->p_glGetFloatv( GL_COLOR_CLEAR_VALUE, clear_color );
+    funcs->p_glGetBooleanv( GL_COLOR_WRITEMASK, mask );
+    scissor = funcs->p_glIsEnabled( GL_SCISSOR_TEST );
+    funcs->p_glDisable( GL_SCISSOR_TEST );
+    funcs->p_glColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
+
+    /* Wined3D has already scaled this 4:3 window to the screen height, at
+     * the left edge. Capture the whole 960x720 image before moving it. */
+    funcs->p_glBindFramebuffer( GL_READ_FRAMEBUFFER, 0 );
+    funcs->p_glReadBuffer( GL_BACK );
+    funcs->p_glBindFramebuffer( GL_DRAW_FRAMEBUFFER, scratch->framebuffer );
+    funcs->p_glDrawBuffer( GL_COLOR_ATTACHMENT0 );
+    funcs->p_glBlitFramebuffer( 0, 0, shown.width, shown.height,
+                                0, 0, shown.width, shown.height, GL_COLOR_BUFFER_BIT, GL_NEAREST );
+
+    funcs->p_glBindFramebuffer( GL_READ_FRAMEBUFFER, scratch->framebuffer );
+    funcs->p_glReadBuffer( GL_COLOR_ATTACHMENT0 );
+    funcs->p_glBindFramebuffer( GL_DRAW_FRAMEBUFFER, 0 );
+    funcs->p_glDrawBuffer( GL_BACK );
+    funcs->p_glClearColor( 0.0f, 0.0f, 0.0f, 1.0f );
+    funcs->p_glClear( GL_COLOR_BUFFER_BIT );
+    funcs->p_glBlitFramebuffer( 0, 0, shown.width, shown.height,
+                                shown.x, shown.y, shown.x + shown.width, shown.y + shown.height,
+                                GL_COLOR_BUFFER_BIT, GL_NEAREST );
+
+    funcs->p_glBindFramebuffer( GL_READ_FRAMEBUFFER, old_read );
+    funcs->p_glBindFramebuffer( GL_DRAW_FRAMEBUFFER, old_draw );
+    funcs->p_glReadBuffer( old_read_buffer );
+    funcs->p_glDrawBuffer( old_draw_buffer );
+    funcs->p_glClearColor( clear_color[0], clear_color[1], clear_color[2], clear_color[3] );
+    funcs->p_glColorMask( mask[0], mask[1], mask[2], mask[3] );
+    if (scissor) funcs->p_glEnable( GL_SCISSOR_TEST );
+    pthread_mutex_unlock( &nx_aspect_mutex );
+}
+
 static BOOL nx_drawable_swap( struct opengl_drawable *base )
 {
     unsigned long long start = horizon_interrupt_time();
-    BOOL ret = funcs->p_eglSwapBuffers( egl->display, base->surface );
+    BOOL ret;
+
+    if (impl_from_opengl_drawable( base )->screen && &wine_nx_aspect_source_width &&
+        wine_nx_aspect_source_width && &wine_nx_aspect_source_height && wine_nx_aspect_source_height)
+        nx_aspect_present( wine_nx_aspect_source_width, wine_nx_aspect_source_height );
+    ret = funcs->p_eglSwapBuffers( egl->display, base->surface );
 
     __atomic_add_fetch( &wine_nx_gl_swap_time, horizon_interrupt_time() - start, __ATOMIC_RELAXED );
     __atomic_add_fetch( &wine_nx_gl_swaps, 1, __ATOMIC_RELAXED );

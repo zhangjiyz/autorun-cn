@@ -30,6 +30,7 @@
 #include "ntuser_private.h"
 #include "win32u_private.h"
 #include "wine/gdi_driver.h"
+#include "wine/nx_input_codes.h"
 #include "../../wine-nx-probe/source/compositor.h"
 
 /* Framebuffer hooks implemented in the runtime (wine-nx-probe/source/runtime.c). */
@@ -637,7 +638,8 @@ static BOOL wine_nx_send_keys(void)
         INPUT input = {0};
         UINT scan;
 
-        if (!(changed & (1u << i)) || !wine_nx_pad_keys[i]) continue;
+        if (!(changed & (1u << i)) || !wine_nx_pad_keys[i] ||
+            wine_nx_pad_keys[i] >= WINE_NX_MOUSE_LEFT) continue;
         input.type = INPUT_KEYBOARD;
         input.ki.wVk = wine_nx_pad_keys[i];
         input.ki.dwFlags = (held & (1u << i)) ? 0 : KEYEVENTF_KEYUP;

@@ -20,6 +20,8 @@
 #include "winnt.h"
 #include "winternl.h"
 #include "wine/server.h"
+#include "wine/nx_aspect_fit.h"
+#include "wine/nx_input_codes.h"
 #include "unix_private.h"
 #include "horizon_private.h"
 #include "launcher.h"
@@ -65,7 +67,7 @@ u32 __nx_exception_ignoredebug = 1;
 #define CONFIG_FILE CONFIG_DIR "/settings.json"
 #define DEFAULT_TARGET WINE_DRIVE_C "/curl/curl.exe"
 #ifdef WINE_NX_AMD64
-#define WINE_NX_RUNTIME_BUILD "nx-amd64-box64-3"
+#define WINE_NX_RUNTIME_BUILD "nx-amd64-box64-15"
 #elif defined(WINE_NX_BOX64_DYNAREC)
 #define WINE_NX_RUNTIME_BUILD "nx-wow64-dynarec-218"
 #else
@@ -445,6 +447,20 @@ static struct pointer_cursor wine_nx_cursor =
 static int wine_nx_cursor_moved;
 static int wine_nx_cursor_visible = 1;  /* 0 while the program hides the mouse cursor */
 static int wine_nx_gl_window;  /* an OpenGL window surface owns the screen's NWindow */
+/* The chosen program's 4:3 image in the top-left of the OpenGL back buffer.
+ * Its output is enlarged by winnx_opengl.c; touch normally uses the inverse map. */
+int wine_nx_aspect_source_width, wine_nx_aspect_source_height;
+static struct wine_nx_aspect_rect wine_nx_aspect_shown;
+/* Some games read GetCursorPos in desktop coordinates even when their image
+ * is presented from a smaller back buffer. Keep touch in desktop coordinates
+ * for those games; the default remains the inverse aspect-fit mapping. */
+static int wine_nx_touch_screen_coordinates;
+/* When configured for a game with Shift+arrows to run, the left stick holds
+ * its Shift mapping while moving; pressing L3 temporarily walks instead. */
+static int wine_nx_left_stick_shift_run;
+static int wine_nx_left_stick_eight_way;
+static int wine_nx_left_stick_aim_radius;
+static int wine_nx_left_stick_mouse_move;
 /* Controller and touchscreen state, guarded by wine_nx_pointer_mutex. */
 static pthread_mutex_t wine_nx_pointer_mutex = PTHREAD_MUTEX_INITIALIZER;
 static struct pointer_cursor wine_nx_pointer =
@@ -769,11 +785,23 @@ void wine_nx_request_quit( const char *why );
  * button held.  Returns nonzero when the position changed. */
 int wine_nx_pointer_poll( int *x, int *y, unsigned int *buttons )
 {
+    static const struct { u64 button; int key; } pad_buttons[] =
+    {
+        { HidNpadButton_X, WINE_NX_KEY_X }, { HidNpadButton_Y, WINE_NX_KEY_Y },
+        { HidNpadButton_L, WINE_NX_KEY_L }, { HidNpadButton_R, WINE_NX_KEY_R },
+        { HidNpadButton_ZL, WINE_NX_KEY_ZL }, { HidNpadButton_ZR, WINE_NX_KEY_ZR },
+        { HidNpadButton_Plus, WINE_NX_KEY_PLUS }, { HidNpadButton_Minus, WINE_NX_KEY_MINUS },
+        { HidNpadButton_StickL, WINE_NX_KEY_STICKL }, { HidNpadButton_StickR, WINE_NX_KEY_STICKR },
+        { HidNpadButton_Up, WINE_NX_KEY_UP }, { HidNpadButton_Down, WINE_NX_KEY_DOWN },
+        { HidNpadButton_Left, WINE_NX_KEY_LEFT }, { HidNpadButton_Right, WINE_NX_KEY_RIGHT },
+        { HidNpadButton_A, WINE_NX_KEY_A }, { HidNpadButton_B, WINE_NX_KEY_B },
+    };
     HidTouchScreenState touch = {0};
     HidAnalogStickState stick;
     unsigned int pressed = 0;
     u64 now, held, xinput_poll;
-    int moved, gamepad, leave = 0;
+    int moved, gamepad, leave = 0, touching;
+    unsigned int i;
 
     pthread_mutex_lock( &wine_nx_pointer_mutex );
     if (!wine_nx_pointer_ready)
@@ -795,13 +823,22 @@ int wine_nx_pointer_poll( int *x, int *y, unsigned int *buttons )
     xinput_poll = wine_nx_xinput_last_poll;
     gamepad = xinput_poll && (xinput_poll >= now || armTicksToNs( now - xinput_poll ) < 1000000000ull);
     moved = 0;
-    if (hidGetTouchScreenStates( &touch, 1 ) && touch.count > 0)
+    touching = hidGetTouchScreenStates( &touch, 1 ) && touch.count > 0;
+    if (touching)
     {
         if (wine_nx_device_mode[WINE_NX_DEVICE_TOUCH] == WINE_NX_POINTS)
         {
             int old_x = (int)wine_nx_pointer.x, old_y = (int)wine_nx_pointer.y;
+            int touch_x = touch.touches[0].x, touch_y = touch.touches[0].y;
 
-            pointer_cursor_place( &wine_nx_pointer, touch.touches[0].x, touch.touches[0].y );
+            if (wine_nx_aspect_source_width && !wine_nx_touch_screen_coordinates)
+            {
+                touch_x = wine_nx_aspect_map( touch_x, wine_nx_aspect_shown.x,
+                                               wine_nx_aspect_shown.width, wine_nx_aspect_source_width );
+                touch_y = wine_nx_aspect_map( touch_y, wine_nx_aspect_shown.y,
+                                               wine_nx_aspect_shown.height, wine_nx_aspect_source_height );
+            }
+            pointer_cursor_place( &wine_nx_pointer, touch_x, touch_y );
             moved = (int)wine_nx_pointer.x != old_x || (int)wine_nx_pointer.y != old_y;
             wine_nx_pointer_placed |= moved;
             pressed |= WINE_NX_POINTER_LEFT;
@@ -856,36 +893,81 @@ int wine_nx_pointer_poll( int *x, int *y, unsigned int *buttons )
     {
         /* The left stick steers as well as the d-pad, past a dead zone. */
         HidAnalogStickState steer = padGetStickPos( &wine_nx_pad, 0 );
-        static const struct { u64 button; int key; } buttons[] =
-        {
-            { HidNpadButton_X, WINE_NX_KEY_X }, { HidNpadButton_Y, WINE_NX_KEY_Y },
-            { HidNpadButton_L, WINE_NX_KEY_L }, { HidNpadButton_R, WINE_NX_KEY_R },
-            { HidNpadButton_ZL, WINE_NX_KEY_ZL }, { HidNpadButton_ZR, WINE_NX_KEY_ZR },
-            { HidNpadButton_Plus, WINE_NX_KEY_PLUS }, { HidNpadButton_Minus, WINE_NX_KEY_MINUS },
-            { HidNpadButton_StickL, WINE_NX_KEY_STICKL }, { HidNpadButton_StickR, WINE_NX_KEY_STICKR },
-            /* The d-pad's four are left out when it is moving the mouse. */
-            { HidNpadButton_Up, WINE_NX_KEY_UP }, { HidNpadButton_Down, WINE_NX_KEY_DOWN },
-            { HidNpadButton_Left, WINE_NX_KEY_LEFT }, { HidNpadButton_Right, WINE_NX_KEY_RIGHT },
-            { HidNpadButton_A, WINE_NX_KEY_A }, { HidNpadButton_B, WINE_NX_KEY_B },  /* sent only if given a key */
-        };
-        unsigned int keys = 0, i;
+        unsigned int keys = 0;
 
-        for (i = 0; i < sizeof(buttons) / sizeof(buttons[0]); i++)
+        for (i = 0; i < sizeof(pad_buttons) / sizeof(pad_buttons[0]); i++)
         {
-            if (wine_nx_device_mode[WINE_NX_DEVICE_DPAD] == WINE_NX_POINTS &&
-                buttons[i].key >= WINE_NX_KEY_UP && buttons[i].key <= WINE_NX_KEY_RIGHT)
+            if (wine_nx_left_stick_shift_run && pad_buttons[i].key == WINE_NX_KEY_STICKL)
                 continue;
-            if (held & buttons[i].button) keys |= 1u << buttons[i].key;
+            if (wine_nx_device_mode[WINE_NX_DEVICE_DPAD] == WINE_NX_POINTS &&
+                pad_buttons[i].key >= WINE_NX_KEY_UP && pad_buttons[i].key <= WINE_NX_KEY_RIGHT)
+                continue;
+            if (held & pad_buttons[i].button) keys |= 1u << pad_buttons[i].key;
         }
         /* The left stick steers with the d-pad unless it was given keys of
          * its own: Halo walks with w, a, s and d and works its menus with the
          * arrows, and one controller has to do both. */
         if (wine_nx_device_mode[WINE_NX_DEVICE_LEFT] == WINE_NX_PRESSES)
         {
-            if (steer.y >  12000) keys |= 1u << (wine_nx_pad_keys[WINE_NX_KEY_LUP] ? WINE_NX_KEY_LUP : WINE_NX_KEY_UP);
-            if (steer.y < -12000) keys |= 1u << (wine_nx_pad_keys[WINE_NX_KEY_LDOWN] ? WINE_NX_KEY_LDOWN : WINE_NX_KEY_DOWN);
-            if (steer.x < -12000) keys |= 1u << (wine_nx_pad_keys[WINE_NX_KEY_LLEFT] ? WINE_NX_KEY_LLEFT : WINE_NX_KEY_LEFT);
-            if (steer.x >  12000) keys |= 1u << (wine_nx_pad_keys[WINE_NX_KEY_LRIGHT] ? WINE_NX_KEY_LRIGHT : WINE_NX_KEY_RIGHT);
+            int xdir = 0, ydir = 0, steering, mouse_steer;
+            int switching_weapon = wine_nx_device_mode[WINE_NX_DEVICE_RIGHT] == WINE_NX_PRESSES &&
+                                   (stick.y > 12000 || stick.y < -12000 ||
+                                    stick.x > 12000 || stick.x < -12000);
+
+            if (wine_nx_left_stick_eight_way)
+            {
+                int ax = steer.x < 0 ? -steer.x : steer.x;
+                int ay = steer.y < 0 ? -steer.y : steer.y;
+                int major = ax > ay ? ax : ay;
+
+                /* A radial dead zone and eight angle sectors also catch
+                 * diagonals whose individual axes fall below 12000. */
+                if ((long long)steer.x * steer.x + (long long)steer.y * steer.y > 12000LL * 12000)
+                {
+                    if (ax * 100 >= major * 42) xdir = steer.x > 0 ? 1 : -1;
+                    if (ay * 100 >= major * 42) ydir = steer.y > 0 ? 1 : -1;
+                }
+            }
+            else
+            {
+                if (steer.x > 12000) xdir = 1;
+                if (steer.x < -12000) xdir = -1;
+                if (steer.y > 12000) ydir = 1;
+                if (steer.y < -12000) ydir = -1;
+            }
+            steering = xdir || ydir;
+            mouse_steer = wine_nx_left_stick_mouse_move && steering &&
+                          !(held & HidNpadButton_StickL) && !gamepad;
+
+            /* This game's Shift+A and Shift+S are cheat shortcuts. Release
+             * Shift before the right stick sends a weapon-selection key. */
+            if (wine_nx_left_stick_shift_run && steering && !mouse_steer && !switching_weapon &&
+                !(held & HidNpadButton_StickL) && wine_nx_pad_keys[WINE_NX_KEY_STICKL] == 0x10)
+                keys |= 1u << WINE_NX_KEY_STICKL;
+            if (!mouse_steer)
+            {
+                if (ydir > 0) keys |= 1u << (wine_nx_pad_keys[WINE_NX_KEY_LUP] ? WINE_NX_KEY_LUP : WINE_NX_KEY_UP);
+                if (ydir < 0) keys |= 1u << (wine_nx_pad_keys[WINE_NX_KEY_LDOWN] ? WINE_NX_KEY_LDOWN : WINE_NX_KEY_DOWN);
+                if (xdir < 0) keys |= 1u << (wine_nx_pad_keys[WINE_NX_KEY_LLEFT] ? WINE_NX_KEY_LLEFT : WINE_NX_KEY_LEFT);
+                if (xdir > 0) keys |= 1u << (wine_nx_pad_keys[WINE_NX_KEY_LRIGHT] ? WINE_NX_KEY_LRIGHT : WINE_NX_KEY_RIGHT);
+            }
+            if (wine_nx_left_stick_aim_radius && steering && !touching && !gamepad &&
+                wine_nx_touch_screen_coordinates && wine_nx_aspect_shown.width)
+            {
+                int radius = wine_nx_left_stick_aim_radius;
+                int distance = xdir && ydir ? radius * 707 / 1000 : radius;
+                int aim_x = wine_nx_aspect_shown.x + wine_nx_aspect_shown.width / 2 + xdir * distance;
+                int aim_y = wine_nx_aspect_shown.y + wine_nx_aspect_shown.height * 5 / 12 - ydir * distance;
+                int old_x = (int)wine_nx_pointer.x, old_y = (int)wine_nx_pointer.y;
+
+                pointer_cursor_place( &wine_nx_pointer, aim_x, aim_y );
+                if ((int)wine_nx_pointer.x != old_x || (int)wine_nx_pointer.y != old_y)
+                {
+                    moved = 1;
+                    wine_nx_pointer_placed = 1;
+                }
+            }
+            if (mouse_steer && !touching) pressed |= WINE_NX_POINTER_LEFT;
         }
         if (wine_nx_device_mode[WINE_NX_DEVICE_RIGHT] == WINE_NX_PRESSES)
         {
@@ -903,6 +985,12 @@ int wine_nx_pointer_poll( int *x, int *y, unsigned int *buttons )
             if (wine_nx_touch_dx >  WINE_NX_TOUCH_STEP) keys |= 1u << WINE_NX_KEY_TRIGHT;
         }
         if (gamepad) keys = 0;
+        for (i = 0; i < WINE_NX_KEY_COUNT; i++)
+        {
+            if (!(keys & (1u << i))) continue;
+            if (wine_nx_pad_keys[i] == WINE_NX_MOUSE_LEFT) pressed |= WINE_NX_POINTER_LEFT;
+            else if (wine_nx_pad_keys[i] == WINE_NX_MOUSE_RIGHT) pressed |= WINE_NX_POINTER_RIGHT;
+        }
         __atomic_store_n( &wine_nx_pad_key_state, keys, __ATOMIC_RELAXED );
     }
     *x = (int)wine_nx_pointer.x;
@@ -1396,7 +1484,7 @@ static int config_bool( const char *key, int fallback, const char *was, int flip
 
 /* switch/wine/keys.txt: one NAME=code line for each control whose key should
  * differ from the default, where code is a Windows virtual-key code, decimal or
- * 0x-prefixed. Unknown names and malformed lines are reported and skipped, so a
+ * 0x-prefixed, or 0x100/0x101 for mouse buttons. Unknown names are reported, so a
  * typo costs one control rather than the file. */
 static void read_key_map( const char *path )
 {
@@ -1609,7 +1697,8 @@ static const char runtime_environment[] =
     "USERNAME=wine\0"
     "USERPROFILE=C:\\users\\wine\0"
     "windir=C:\\windows\0"
-    "WINE_D3D_CONFIG=cs_spin_count=64,explicit_buffer_flush=1\0";
+    "WINE_D3D_CONFIG=cs_spin_count=64,explicit_buffer_flush=1\0"
+    "WINE_NX_RAW_INPUT=1\0";
 
 /* Horizon has no console device: the standard handles are files next to the
  * runtime, copied into this log when the process exits. */
@@ -1639,6 +1728,7 @@ static RTL_USER_PROCESS_PARAMETERS *runtime_create_process_params( const char *t
     WCHAR *cursor;
     const char *cmdline_str, *dxvk_hud = launcher_hud_values[runtime_dxvk_hud];
     char dxvk_dir[96], vkd3d_dir[96], vkd3d_path[104] = "", graphics_path[208] = "";
+    int cmdline_len;
     int dxvk_path = launcher_dxvk_version_directory( main_image_info.Machine, runtime_dxvk_version,
                                                      dxvk_dir, sizeof(dxvk_dir) );
 
@@ -1677,7 +1767,8 @@ static RTL_USER_PROCESS_PARAMETERS *runtime_create_process_params( const char *t
     /* Read args.txt next to the target NRO (sdmc:/switch/wine/args.txt).
      * Format expected: "<argv[0]> <args...>" — a full Win32 command line.
      * If present, use it verbatim as CommandLine so curl etc. see args via
-     * GetCommandLineA/W. Otherwise fall back to the dos_path alone. */
+     * GetCommandLineA/W. Otherwise use a quoted executable path, as Windows
+     * launchers commonly provide and older games may require when parsing it. */
     /* A program's own controls, over the shared ones: SPEED2.EXE reads
      * SPEED2.keys.txt, unless its settings say to use Autorun's alone. The
      * file is left where it is either way, so turning it back on brings back
@@ -1688,11 +1779,77 @@ static RTL_USER_PROCESS_PARAMETERS *runtime_create_process_params( const char *t
         struct launcher_kv kv;
         int own = -1;
 
+        pthread_mutex_lock( &wine_nx_pointer_mutex );
+        wine_nx_left_stick_shift_run = 0;
+        wine_nx_left_stick_eight_way = 0;
+        wine_nx_left_stick_aim_radius = 0;
+        wine_nx_left_stick_mouse_move = 0;
+        pthread_mutex_unlock( &wine_nx_pointer_mutex );
         if (target[1] != ':' &&
             launcher_program_settings_path( RUNTIME_DIR, target, settings_path, sizeof(settings_path) ) &&
             launcher_kv_load( &kv, settings_path ) && kv.size)
         {
             launcher_settings_read( &kv, &settings );
+            {
+                char left_stick_run[32] = "";
+                int eight_way = launcher_kv_get_int( &kv, "left-stick-eight-way", 0 ) == 1;
+                int aim_radius = launcher_kv_get_int( &kv, "left-stick-aim", 0 );
+                char left_stick_move[32] = "";
+                int mouse_move = launcher_kv_get( &kv, "left-stick-move", left_stick_move,
+                                                  sizeof(left_stick_move) ) &&
+                                 !strcasecmp( left_stick_move, "mouse" );
+                int shift_run = launcher_kv_get( &kv, "left-stick-run", left_stick_run,
+                                                 sizeof(left_stick_run) ) &&
+                                !strcasecmp( left_stick_run, "shift" );
+
+                if (aim_radius < 0 || aim_radius > 320) aim_radius = 0;
+
+                pthread_mutex_lock( &wine_nx_pointer_mutex );
+                wine_nx_left_stick_shift_run = shift_run;
+                wine_nx_left_stick_eight_way = eight_way;
+                wine_nx_left_stick_aim_radius = aim_radius;
+                wine_nx_left_stick_mouse_move = mouse_move;
+                pthread_mutex_unlock( &wine_nx_pointer_mutex );
+                if (shift_run) log_line( "[NXINPUT] left stick holds Shift to run; L3 walks" );
+                if (eight_way) log_line( "[NXINPUT] left stick eight-way sectors enabled" );
+                if (aim_radius) log_line( "[NXINPUT] left stick aim radius=%d", aim_radius );
+                if (mouse_move) log_line( "[NXINPUT] left stick holds mouse button to move; L3 uses arrows" );
+            }
+            {
+                char aspect[32] = "", touch_coordinates[32] = "", extra;
+                int width, height;
+                struct wine_nx_aspect_rect shown;
+
+                if (launcher_kv_get( &kv, "aspect-fit", aspect, sizeof(aspect) ) &&
+                    sscanf( aspect, "%dx%d%c", &width, &height, &extra ) == 2 &&
+                    wine_nx_aspect_fit_rect( width, height, WINE_NX_FB_W, WINE_NX_FB_H,
+                                             &shown ))
+                {
+                    int screen_coordinates =
+                        launcher_kv_get( &kv, "touch-coordinates", touch_coordinates,
+                                         sizeof(touch_coordinates) ) &&
+                        !strcasecmp( touch_coordinates, "screen" );
+
+                    pthread_mutex_lock( &wine_nx_pointer_mutex );
+                    wine_nx_aspect_shown = shown;
+                    wine_nx_aspect_source_width = width;
+                    wine_nx_aspect_source_height = height;
+                    wine_nx_touch_screen_coordinates = screen_coordinates;
+                    wine_nx_pointer.width = wine_nx_touch_screen_coordinates ? WINE_NX_FB_W : width;
+                    wine_nx_pointer.height = wine_nx_touch_screen_coordinates ? WINE_NX_FB_H : height;
+                    pointer_cursor_place( &wine_nx_pointer, wine_nx_pointer.width / 2,
+                                          wine_nx_pointer.height / 2 );
+                    wine_nx_pointer_sent_x = (int)wine_nx_pointer.x;
+                    wine_nx_pointer_sent_y = (int)wine_nx_pointer.y;
+                    pthread_mutex_unlock( &wine_nx_pointer_mutex );
+                    log_line( "[NXASPECT] %dx%d -> %dx%d at %d,%d", width, height,
+                              wine_nx_aspect_shown.width, wine_nx_aspect_shown.height,
+                              wine_nx_aspect_shown.x, wine_nx_aspect_shown.y );
+                    log_line( "[NXASPECT] touch coordinates: %s",
+                              wine_nx_touch_screen_coordinates ? "screen" : "game" );
+                }
+                else if (aspect[0]) log_line( "[NXASPECT] unsupported aspect-fit '%s'", aspect );
+            }
             own = settings.own_controls;
         }
         if (own != 0 && target[1] != ':' && launcher_keys_path( target, keys_path, sizeof(keys_path) ))
@@ -1707,7 +1864,9 @@ static RTL_USER_PROCESS_PARAMETERS *runtime_create_process_params( const char *t
             launcher_sibling_path( target, ".box64.txt", wine_nx_box64_options_path, 512 );
     }
 
-    cmdline_str = dos_path;
+    cmdline_len = snprintf( cmdline, sizeof(cmdline), "\"%s\"", dos_path );
+    if (cmdline_len < 0 || (size_t)cmdline_len >= sizeof(cmdline)) return NULL;
+    cmdline_str = cmdline;
     if (target[1] != ':' && launcher_args_path( target, args_path, sizeof(args_path) ) &&
         read_first_line( args_path, args_buf, sizeof(args_buf) ) &&
         launcher_command_line( dos_path, args_buf, cmdline, sizeof(cmdline) ))
