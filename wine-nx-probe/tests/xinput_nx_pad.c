@@ -8,10 +8,11 @@
 static int mock_connected;
 static u64 mock_buttons, mock_tick;
 static HidAnalogStickState mock_sticks[2];
+static unsigned int mock_pad_updates;
 
 void padConfigureInput(int count, int style) { assert(count == 1 && style == HidNpadStyleSet_NpadStandard); }
 void padInitializeDefault(PadState *pad) { (void)pad; }
-void padUpdate(PadState *pad) { (void)pad; }
+void padUpdate(PadState *pad) { (void)pad; mock_pad_updates++; }
 int padIsConnected(PadState *pad) { (void)pad; return mock_connected; }
 HidAnalogStickState padGetStickPos(PadState *pad, int index) { (void)pad; return mock_sticks[index]; }
 u64 padGetButtons(PadState *pad) { (void)pad; return mock_buttons; }
@@ -82,6 +83,28 @@ int main(void)
         state.connected = 1;
         wine_nx_xinput_unix_funcs[nx_xinput_get_state](&state);
         assert(!state.connected);
+
+        /* SDL probing both ABI tables must not steal the keyboard mapping.
+         * A rumble query must not re-enable the device either. */
+        state.index = 0;
+        wine_nx_force_keyboard = 1;
+        {
+            unsigned int updates = mock_pad_updates;
+            u64 last_poll = wine_nx_xinput_last_poll;
+            mock_tick++;
+            state.connected = 1;
+            wine_nx_xinput_wow64_unix_funcs[nx_xinput_get_state](&state);
+            assert(!state.connected);
+            state.connected = 1;
+            wine_nx_xinput_unix_funcs[nx_xinput_get_state](&state);
+            assert(!state.connected);
+            wine_nx_xinput_unix_funcs[nx_xinput_set_state](&vibration);
+            assert(!vibration.connected);
+            assert(mock_pad_updates == updates && wine_nx_xinput_last_poll == last_poll);
+        }
+        wine_nx_force_keyboard = 0;
+        wine_nx_xinput_unix_funcs[nx_xinput_get_state](&state);
+        assert(state.connected && wine_nx_xinput_last_poll == mock_tick);
     }
 
     puts( "XInput Switch pad: mapping, native and WoW64 tables, 64-bit call pointer and layout passed" );

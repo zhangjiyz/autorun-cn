@@ -3,6 +3,10 @@
 #include <stdio.h>
 #include "../source/audio_unix.c"
 
+static unsigned int create_logs;
+void wine_nx_runtime_trace(const char *msg)
+{ assert(strstr(msg, "[NXAUDIO] create ")); create_logs++; }
+
 static AudioOutBuffer *queued[NX_BUFFERS];
 static unsigned int queued_count, ready;
 static BOOL host_started;
@@ -74,6 +78,14 @@ int main(void)
     BOOL wrapped = FALSE;
     wine_nx_audio_unix_funcs[test_connect](&connect); assert(connect.priority == Priority_Preferred);
     wine_nx_audio_unix_funcs[create_stream](&create); assert(create.result == S_OK && channels == 2 && handle);
+    assert(create_logs == 1);
+    {
+        stream_handle rejected = 0;
+        struct create_stream_params second = create;
+        second.stream = &rejected;
+        nx_create_stream(&second);
+        assert(second.result == AUDCLNT_E_DEVICE_IN_USE && !rejected && create_logs == 2);
+    }
     s = nx_stream(handle);
     get.stream = put.stream = handle;
     wine_nx_audio_unix_funcs[get_render_buffer](&get);

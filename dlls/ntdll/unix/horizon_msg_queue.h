@@ -28,6 +28,16 @@
                                         HORIZON_MSGQ_QS_MOUSEBUTTON | HORIZON_MSGQ_QS_RAWINPUT)
 #define HORIZON_MSGQ_QS_SMRESULT       0x8000
 
+/* Hardware queue categories, matching server/queue.c get_hardware_msg_bit.
+ * Refresh must preserve keyboard and raw-input wake bits after enqueue. */
+static inline unsigned int horizon_msgq_hardware_bit( unsigned int message )
+{
+    if (message == 0x00fe || message == 0x00ff) return HORIZON_MSGQ_QS_RAWINPUT;
+    if (message == 0x0200 || message == 0x00a0) return HORIZON_MSGQ_QS_MOUSEMOVE;
+    if (message >= 0x0100 && message <= 0x0109) return HORIZON_MSGQ_QS_KEY;
+    return HORIZON_MSGQ_QS_MOUSEBUTTON;
+}
+
 #define HORIZON_MSGQ_MSG_ASCII           0
 #define HORIZON_MSGQ_MSG_UNICODE         1
 #define HORIZON_MSGQ_MSG_NOTIFY          2

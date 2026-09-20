@@ -19,6 +19,7 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #define SD_CACHE_CHUNK  (128 * 1024)  /* bytes read per request on a miss */
 #define SD_CACHE_LINES  8             /* chunks kept per file */
@@ -44,6 +45,8 @@ struct sd_cache_file
     char *path;
     int writable;
     int cacheable;
+    int stat_valid;
+    struct stat stat_value;
     struct sd_cache_line lines[SD_CACHE_LINES];
     struct sd_cache_file *next;
 };
@@ -55,6 +58,7 @@ static inline void sd_cache_drop( struct sd_cache_file *file, struct sd_cache_po
 {
     unsigned int i;
 
+    file->stat_valid = 0;
     for (i = 0; i < SD_CACHE_LINES; i++)
     {
         if (!file->lines[i].data) continue;
@@ -62,6 +66,28 @@ static inline void sd_cache_drop( struct sd_cache_file *file, struct sd_cache_po
         pool->used--;
         memset( &file->lines[i], 0, sizeof(file->lines[i]) );
     }
+}
+
+/* The same read-only lifetime and writer/rename/truncate invalidation as data.
+ * A failed query is never cached. The caller holds the cache lock. */
+typedef int (*sd_cache_stat_fn)( void *ctx, struct stat *st );
+static inline int sd_cache_read_stat( struct sd_cache_file *file, struct stat *st,
+                                      sd_cache_stat_fn query, void *ctx, unsigned int *queries )
+{
+    int ret;
+    if (file && file->cacheable && file->stat_valid)
+    {
+        *st = file->stat_value;
+        return 0;
+    }
+    (*queries)++;
+    ret = query( ctx, st );
+    if (!ret && file && file->cacheable)
+    {
+        file->stat_value = *st;
+        file->stat_valid = 1;
+    }
+    return ret;
 }
 
 static inline struct sd_cache_line *sd_cache_line_for( struct sd_cache_file *file, long long offset )

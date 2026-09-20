@@ -25,6 +25,8 @@ _Static_assert( NX_PAD_A == HidNpadButton_A && NX_PAD_B == HidNpadButton_B && NX
  * recent the runtime stops turning the pad into keys and mouse clicks
  * (wine_nx_pointer_poll in runtime.c), so the program does not get both. */
 u64 wine_nx_xinput_last_poll;
+/* Per-game opt-out: SDL may probe XInput even when its game uses keyboard input. */
+int wine_nx_force_keyboard;
 
 static pthread_mutex_t pad_mutex = PTHREAD_MUTEX_INITIALIZER;
 static PadState pad;
@@ -38,6 +40,7 @@ static NTSTATUS nx_xinput_get_state_unix( void *args )
     XINPUT_GAMEPAD gamepad;
 
     params->connected = 0;
+    if (__atomic_load_n(&wine_nx_force_keyboard, __ATOMIC_RELAXED)) return STATUS_SUCCESS;
     if (params->index) return STATUS_SUCCESS;  /* player 1 only */
     pthread_mutex_lock( &pad_mutex );
     if (!pad_ready)

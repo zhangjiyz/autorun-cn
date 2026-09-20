@@ -2,6 +2,7 @@
  * Native audout backend behind the packaged winenxaudio.drv PE module.
  * Initial backend: one render client, stereo 48 kHz signed 16-bit PCM.
  * Wine's shared-mode converter handles other application formats. */
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <malloc.h>
@@ -147,6 +148,20 @@ static void nx_free(struct nx_audio_stream *s)
     for (i = 0; i < NX_BUFFERS; i++) free(s->buffers[i].buffer);
     free(s);
 }
+extern void wine_nx_runtime_trace( const char *msg ) __attribute__((weak));
+static void nx_log_create( const struct create_stream_params *p )
+{
+    static unsigned int traced;
+    if (__atomic_fetch_add( &traced, 1, __ATOMIC_RELAXED ) < 32 && wine_nx_runtime_trace)
+    {
+        char line[192];
+        snprintf( line, sizeof(line), "[NXAUDIO] create flow=%d share=%d rate=%u channels=%u bits=%u flags=%x result=%08x",
+                  p->flow, p->share, p->fmt ? (unsigned)p->fmt->nSamplesPerSec : 0,
+                  p->fmt ? p->fmt->nChannels : 0, p->fmt ? p->fmt->wBitsPerSample : 0,
+                  (unsigned)p->flags, (unsigned)p->result );
+        wine_nx_runtime_trace( line );
+    }
+}
 static NTSTATUS nx_create_stream(void *args)
 {
     struct create_stream_params *p = args;
@@ -154,12 +169,12 @@ static NTSTATUS nx_create_stream(void *args)
     SIZE_T bytes;
     unsigned int i;
     p->result = AUDCLNT_E_UNSUPPORTED_FORMAT;
-    if (p->flow != eRender || !nx_format(p->fmt)) return STATUS_SUCCESS;
+    if (p->flow != eRender || !nx_format(p->fmt)) { nx_log_create(p); return STATUS_SUCCESS; }
     p->result = AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED;
-    if (p->share != AUDCLNT_SHAREMODE_SHARED) return STATUS_SUCCESS;
+    if (p->share != AUDCLNT_SHAREMODE_SHARED) { nx_log_create(p); return STATUS_SUCCESS; }
     p->result = E_INVALIDARG;
-    if (p->flags & AUDCLNT_STREAMFLAGS_RATEADJUST) return STATUS_SUCCESS;
-    if (p->duration < 0 || p->duration > 20000000) return STATUS_SUCCESS;
+    if (p->flags & AUDCLNT_STREAMFLAGS_RATEADJUST) { nx_log_create(p); return STATUS_SUCCESS; }
+    if (p->duration < 0 || p->duration > 20000000) { nx_log_create(p); return STATUS_SUCCESS; }
     pthread_mutex_lock(&audio_lock);
     p->result = AUDCLNT_E_DEVICE_IN_USE;
     if (active) goto done;
@@ -196,6 +211,7 @@ static NTSTATUS nx_create_stream(void *args)
     p->result = S_OK;
 done:
     pthread_mutex_unlock(&audio_lock);
+    nx_log_create(p);
     return STATUS_SUCCESS;
 }
 /* Keep frames in padding until audout returns ownership of the DMA buffer.

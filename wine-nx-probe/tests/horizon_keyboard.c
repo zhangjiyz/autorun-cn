@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "../../dlls/ntdll/unix/horizon_keyboard.h"
+#include "../../include/wine/nx_input_codes.h"
 
 static unsigned char desktop[256], thread[256];
 static int alt_pressed;
@@ -41,6 +42,29 @@ int main(void)
     assert( e.message == HORIZON_KBD_WM_KEYUP && e.lparam == 0xc01c0001 && e.data_flags == 0x80 );
     assert( e.raw.flags == HORIZON_RI_KEY_BREAK && e.raw.message == 0x101 );
     assert( desktop[0x0d] == 0x41 && thread[0x0d] == 0x01 );  /* up; the asynchronous bit stays */
+
+    /* Actual controller mapping -> scan -> server event. MapVirtualKeyEx's
+     * null-driver fallback returns keypad aliases without the E0 prefix. */
+    {
+        static const unsigned int nav[][2] = {
+            {0x21,0x49}, {0x22,0x51}, {0x23,0x4f}, {0x24,0x47},
+            {0x25,0x4b}, {0x26,0x48}, {0x27,0x4d}, {0x28,0x50}, {0x2d,0x52}, {0x2e,0x53}
+        };
+        unsigned int i;
+        for (i = 0; i < sizeof(nav) / sizeof(nav[0]); i++)
+        {
+            unsigned int scan = wine_nx_keyboard_scan( nav[i][0], nav[i][1] );
+            unsigned int flags = (scan & 0xff00) == 0xe000 ? HORIZON_KEYEVENTF_EXTENDEDKEY : 0;
+            e = key( nav[i][0], scan & 0xff, flags );
+            assert( e.vkey == nav[i][0] && e.raw.flags == HORIZON_RI_KEY_E0 );
+            assert( e.lparam == (0x01000001u | (nav[i][1] << 16)) );
+            e = key( nav[i][0], scan & 0xff, flags | HORIZON_KEYEVENTF_KEYUP );
+            assert( e.raw.flags == (HORIZON_RI_KEY_E0 | HORIZON_RI_KEY_BREAK) );
+        }
+        assert( wine_nx_keyboard_scan( 0x68, 0x48 ) == 0x48 ); /* genuine numpad 8 */
+        assert( wine_nx_keyboard_scan( 0x0d, 0x1c ) == 0x1c ); /* Enter */
+        assert( wine_nx_keyboard_scan( 0x1b, 0x01 ) == 0x01 ); /* Esc */
+    }
 
     /* An arrow is an extended key: DirectInput maps E0 48 to DIK_UP. */
     e = key( 0x26, 0x48, HORIZON_KEYEVENTF_EXTENDEDKEY );

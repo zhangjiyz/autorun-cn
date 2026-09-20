@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "cheats": [
+    {
+      "id": "example-toggle",
+      "name": "测试开关",
+      "description": "仅展示开关设置，不对游戏产生效果",
+      "type": "toggle",
+      "backend": "example.toggle"
+    },
+    {
+      "id": "example-value",
+      "name": "测试数值",
+      "description": "仅展示数值设置，不对游戏产生效果",
+      "type": "integer",
+      "min": 0,
+      "max": 100,
+      "step": 5,
+      "default": 10,
+      "backend": "example.value"
+    }
+  ]
+}

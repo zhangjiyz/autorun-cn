@@ -269,6 +269,46 @@ static void test_bits(void)
     assert( !horizon_msgq_get( &queues, 0, NULL ) );
 }
 
+/* Enqueue then refresh exactly as the server does. A key-only wait must
+ * still see key input; a raw-input consumer must not wait for a mouse click. */
+static void test_hardware_refresh(void)
+{
+    static const struct { unsigned int message, bit; } cases[] =
+    {
+        {0x0100, HORIZON_MSGQ_QS_KEY},       /* WM_KEYDOWN */
+        {0x0101, HORIZON_MSGQ_QS_KEY},       /* WM_KEYUP */
+        {0x0104, HORIZON_MSGQ_QS_KEY},       /* WM_SYSKEYDOWN */
+        {0x0105, HORIZON_MSGQ_QS_KEY},       /* WM_SYSKEYUP */
+        {0x00ff, HORIZON_MSGQ_QS_RAWINPUT},  /* WM_INPUT */
+        {0x00fe, HORIZON_MSGQ_QS_RAWINPUT},  /* WM_INPUT_DEVICE_CHANGE */
+        {0x0200, HORIZON_MSGQ_QS_MOUSEMOVE},
+        {0x00a0, HORIZON_MSGQ_QS_MOUSEMOVE}, /* WM_NCMOUSEMOVE */
+        {0x0201, HORIZON_MSGQ_QS_MOUSEBUTTON},
+    };
+    struct horizon_msgq q = {0};
+    unsigned int i;
+    for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
+    {
+        q.wake_mask = q.changed_mask = cases[i].bit;
+        horizon_msgq_touch( &q, cases[i].bit );
+        horizon_msgq_update( &q, horizon_msgq_hardware_bit( cases[i].message ) );
+        assert( q.wake_bits == cases[i].bit && q.changed_bits == cases[i].bit );
+        assert( horizon_msgq_signaled( &q ) );
+        /* PM_NOREMOVE / refresh retains pending input, removal clears it. */
+        horizon_msgq_begin_get( &q, cases[i].bit, 0, ~0u );
+        horizon_msgq_update( &q, horizon_msgq_hardware_bit( cases[i].message ) );
+        assert( q.wake_bits == cases[i].bit && horizon_msgq_signaled( &q ) );
+        horizon_msgq_update( &q, 0 );
+        assert( !q.wake_bits && !q.changed_bits && !horizon_msgq_signaled( &q ) );
+    }
+    /* Removing mouse input must not clear keys or raw input still pending. */
+    horizon_msgq_update( &q, horizon_msgq_hardware_bit( 0x100 ) |
+                           horizon_msgq_hardware_bit( 0xff ) |
+                           horizon_msgq_hardware_bit( 0x201 ) );
+    horizon_msgq_update( &q, horizon_msgq_hardware_bit( 0x100 ) | horizon_msgq_hardware_bit( 0xff ) );
+    assert( q.wake_bits == (HORIZON_MSGQ_QS_KEY | HORIZON_MSGQ_QS_RAWINPUT) );
+}
+
 int main(void)
 {
     test_send_and_reply();
@@ -278,6 +318,7 @@ int main(void)
     test_callback();
     test_thread_exit();
     test_bits();
+    test_hardware_refresh();
     while (queues.head) horizon_msgq_destroy( &queues, queues.head );
     puts( "Horizon message queues: send/reply, ReplyMessage, notify, nested sends, timeouts, cancel, callbacks, "
           "thread exit and wake bits passed" );

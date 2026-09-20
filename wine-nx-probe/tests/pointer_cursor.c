@@ -275,8 +275,43 @@ static void test_held_cursor_still_moves(void)
     }
 }
 
+static void test_continuous_circle(void)
+{
+    struct pointer_cursor c = cursor_at( 640, 300 );
+    double previous_x = 780, previous_y = 300;
+    int angle;
+
+    /* Sweep a full turn: intermediate angles must not snap to eight points. */
+    for (angle = 0; angle <= 360; angle++)
+    {
+        double radians = angle * 3.14159265358979323846 / 180;
+        int x = (int)lround( 30000 * cos( radians ) );
+        int y = (int)lround( 30000 * sin( radians ) );
+        double full_x, full_y;
+
+        assert( pointer_cursor_aim_circle( &c, x, y, 640, 300, 140 ) );
+        assert( fabs( hypot( c.x - 640, c.y - 300 ) - 140 ) < 0.001 );
+        assert( fabs( c.x - (640 + 140 * cos( radians )) ) < 0.02 );
+        assert( fabs( c.y - (300 - 140 * sin( radians )) ) < 0.02 );
+        assert( hypot( c.x - previous_x, c.y - previous_y ) < 2.5 );
+        previous_x = full_x = c.x;
+        previous_y = full_y = c.y;
+        assert( pointer_cursor_aim_circle( &c, x / 2, y / 2, 640, 300, 140 ) );
+        assert( hypot( c.x - full_x, c.y - full_y ) < 0.02 );
+    }
+    assert( !pointer_cursor_aim_circle( &c, 0, 0, 640, 300, 140 ) );
+    assert( !pointer_cursor_aim_circle( &c, 12000, 0, 640, 300, 140 ) );
+    assert( !pointer_cursor_aim_circle( &c, 8000, 8000, 640, 300, 140 ) );
+    assert( fabs( c.x - 780 ) < 0.001 && fabs( c.y - 300 ) < 0.001 );
+    assert( pointer_cursor_aim_circle( &c, 9000, 9000, 640, 300, 140 ) );
+    assert( pointer_cursor_aim_circle( &c, -32768, 32767, 640, 300, 320 ) );
+    assert( fabs( hypot( c.x - 640, c.y - 300 ) - 320 ) < 0.001 );
+    puts( "pointer cursor: continuous circle, tilt independence and radial dead zone passed" );
+}
+
 int main(void)
 {
+    test_continuous_circle();
     test_buttons_between_takes();
     test_dead_zone_ignores_drift();
     test_full_tilt_speed_and_axes();

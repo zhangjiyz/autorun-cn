@@ -12,8 +12,12 @@ import shutil
 import subprocess
 import sys
 
+from dxvk_payload import DLLS as DXVK_DLLS, validate_payload as validate_dxvk_payload
+
 probe = Path(__file__).resolve().parents[1]
 tools = probe / 'tools'
+default_repository = re.search(r'^#define AUTORUN_DEFAULT_REPOSITORY "([^"]+)"$',
+                               (probe / 'source/autorun_update.h').read_text(), re.MULTILINE).group(1)
 build = probe / 'build-switch-wow64-dynarec'
 stage_root = build / 'full-sd-card'
 stage = stage_root / 'switch/wine'
@@ -21,13 +25,19 @@ default_amd64 = probe / 'build-switch-amd64/wine-nx-amd64-box64-mesa-dxvk-vkd3d.
 parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
 parser.add_argument('--amd64', type=Path,
                     default=Path(os.environ.get('WINE_NX_AMD64_PACKAGE', default_amd64)))
+parser.add_argument('--profile-repository', default=default_repository, help='Profile GitHub source, owner/repo (empty: bundled catalog only)')
+parser.add_argument('--profile-release-tag', default='', help='Optional dedicated profile Release tag (empty: latest)')
 parser.add_argument('--no-example-games', action='store_true',
                     help='Package the dual-architecture runtime without the old test-game inputs')
 parser.add_argument('--x86-dxvk-overlay', type=Path,
                     help='Add the matching x86 DXVK overlay without replacing the AMD64 runtime')
+parser.add_argument('--x86-dxvk', type=Path,
+                    help='Pinned x86 payload from build-dxvk.py --arch x86 (generic package only)')
 args = parser.parse_args()
-if args.x86_dxvk_overlay and not args.no_example_games:
-    parser.error('--x86-dxvk-overlay requires --no-example-games')
+if (args.x86_dxvk_overlay or args.x86_dxvk) and not args.no_example_games:
+    parser.error('x86 DXVK options require --no-example-games')
+if args.x86_dxvk_overlay and args.x86_dxvk:
+    parser.error('Use --x86-dxvk or --x86-dxvk-overlay, not both')
 
 
 def merge_amd64(archive, root, keep_launch_files=True):
@@ -87,13 +97,30 @@ if args.no_example_games:
     zhaoyun_profile.mkdir(parents=True, exist_ok=True)
     for name in ('Game.keys.txt', 'README.zh-CN.md', 'patch-game.py'):
         shutil.copy2(probe / 'profiles/zhaoyun' / name, zhaoyun_profile / name)
+    profile_dir = generic_stage / 'profiles'
+    subprocess.run([sys.executable, str(tools / 'package-profiles.py'), '--output-dir', str(profile_dir),
+                    '--repository', args.profile_repository or default_repository, '--release-tag', args.profile_release_tag], check=True)
+    # The main program carries the index only; game packages are separate Release assets.
+    for package in profile_dir.glob('profile-*.zip'):
+        package.unlink()
+    (profile_dir / 'autorun-profiles.zip').unlink(missing_ok=True)
+    component = r'[A-Za-z0-9_-][A-Za-z0-9_.-]{0,98}[A-Za-z0-9_-]|[A-Za-z0-9_-]'
+    if args.profile_repository:
+        assert re.fullmatch(f'(?:{component})/(?:{component})', args.profile_repository), 'invalid profile repository'
+    assert not args.profile_release_tag or re.fullmatch(component, args.profile_release_tag), 'invalid profile tag'
+    import importlib.util
+    profile_spec = importlib.util.spec_from_file_location('profile_packager', tools / 'package-profiles.py')
+    profile_packager = importlib.util.module_from_spec(profile_spec)
+    profile_spec.loader.exec_module(profile_packager)
+    index_url = profile_packager.release_base(args.profile_repository, args.profile_release_tag) + 'autorun-profiles.tsv' if args.profile_repository else ''
+    (generic_stage / 'profile-updates.txt').write_text(f'index-url={index_url}\nauto-update=1\n', encoding='utf-8')
     (generic_stage / 'INSTALL.zh-CN.txt').write_text(
         '将压缩包内的 switch 文件夹复制到 SD 卡根目录。\n'
         '自行把已安装的 Windows 游戏复制到 switch/wine/drive_c，'
         '在 Autorun 中按 + 添加游戏并选择 EXE。\n'
         '启动 Switch 游戏时按住 R 打开自制程序菜单，进入 wine 文件夹，'
         '选择 Autorun（wine-nx-runtime.nro），以获得完整内存。\n'
-        '本包不附带游戏；通过上游在线更新会覆盖中文界面。\n', encoding='utf-8')
+        '本包不附带游戏；主程序在线更新使用 zhangjiyz/autorun-cn 的 autorun.zip。\n', encoding='utf-8')
     if args.x86_dxvk_overlay:
         with ZipFile(args.x86_dxvk_overlay) as overlay:
             assert overlay.testzip() is None, f'{args.x86_dxvk_overlay} is damaged'
@@ -110,6 +137,17 @@ if args.no_example_games:
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 with overlay.open(info) as source, destination.open('wb') as output:
                     shutil.copyfileobj(source, output)
+    x86_dxvk_manifest = None
+    if args.x86_dxvk:
+        x86_dxvk_manifest = validate_dxvk_payload(args.x86_dxvk, 'x86')
+        destination = generic_stage / 'drive_c/dxvk'
+        destination.mkdir(parents=True, exist_ok=True)
+        for name in (*DXVK_DLLS, 'dxvk-manifest.json'):
+            shutil.copy2(args.x86_dxvk / name, destination / name)
+        licenses = generic_stage / 'licenses'
+        licenses.mkdir(exist_ok=True)
+        for name in x86_dxvk_manifest['licenses']:
+            shutil.copy2(args.x86_dxvk / 'licenses' / name, licenses / ('x86-' + name))
     manifest_path = generic_stage / 'build-manifest.json'
     manifest = json.loads(manifest_path.read_text())
     for name, digest in manifest['files'].items():
@@ -133,8 +171,10 @@ if args.no_example_games:
                          probe / 'source/launcher_zh_cn.h')
         },
     }
-    manifest['features']['x86_dxvk'] = bool(args.x86_dxvk_overlay)
-    if not args.x86_dxvk_overlay:
+    manifest['features']['x86_dxvk'] = bool(args.x86_dxvk_overlay or args.x86_dxvk)
+    if x86_dxvk_manifest:
+        manifest['x86_dxvk'] = x86_dxvk_manifest
+    if not manifest['features']['x86_dxvk']:
         config = generic_stage / 'config'
         config.mkdir(exist_ok=True)
         (config / 'settings.json').write_text('{"dxvk-for-new-games": false}\n')

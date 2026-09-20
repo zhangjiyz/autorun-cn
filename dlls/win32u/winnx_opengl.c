@@ -36,6 +36,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(wgl);
 extern void *wine_nx_gl_acquire_window( void );
 extern void wine_nx_gl_release_window( void );
 extern void wine_nx_runtime_trace( const char *msg ) __attribute__((weak));
+extern int wine_nx_window_fit;
 extern int wine_nx_aspect_source_width __attribute__((weak));
 extern int wine_nx_aspect_source_height __attribute__((weak));
 
@@ -243,7 +244,7 @@ static BOOL nx_drawable_swap( struct opengl_drawable *base )
     unsigned long long start = horizon_interrupt_time();
     BOOL ret;
 
-    if (impl_from_opengl_drawable( base )->screen && &wine_nx_aspect_source_width &&
+    if (!wine_nx_window_fit && impl_from_opengl_drawable( base )->screen && &wine_nx_aspect_source_width &&
         wine_nx_aspect_source_width && &wine_nx_aspect_source_height && wine_nx_aspect_source_height)
         nx_aspect_present( wine_nx_aspect_source_width, wine_nx_aspect_source_height );
     ret = funcs->p_eglSwapBuffers( egl->display, base->surface );

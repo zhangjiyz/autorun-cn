@@ -645,9 +645,20 @@ static BOOL wine_nx_send_keys(void)
         input.ki.dwFlags = (held & (1u << i)) ? 0 : KEYEVENTF_KEYUP;
         /* DirectInput names keys by scan code, and an arrow is E0 48, not 48. */
         scan = NtUserMapVirtualKeyEx( input.ki.wVk, MAPVK_VK_TO_VSC_EX, NtUserGetKeyboardLayout( 0 ) );
+        scan = wine_nx_keyboard_scan( input.ki.wVk, scan );
         input.ki.wScan = scan & 0xff;
         if ((scan & 0xff00) == 0xe000) input.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
-        NtUserSendHardwareInput( 0, 0, &input, 0 );
+        {
+            static unsigned int traced;
+            NTSTATUS status = NtUserSendHardwareInput( 0, 0, &input, 0 );
+            if (__atomic_fetch_add( &traced, 1, __ATOMIC_RELAXED ) < 48 && &wine_nx_runtime_trace)
+            {
+                char line[160];
+                snprintf( line, sizeof(line), "[NXKEY] vk=%02x scan=%02x flags=%x held=%x status=%08x",
+                          input.ki.wVk, input.ki.wScan, (unsigned)input.ki.dwFlags, held, (unsigned)status );
+                wine_nx_runtime_trace( line );
+            }
+        }
     }
     nxdrv_trace( "[NXINPUT] keys held=%x changed=%x", held, changed, 0, 0 );
     delivered = held;

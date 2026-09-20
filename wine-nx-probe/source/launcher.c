@@ -43,6 +43,8 @@
 #include "launcher_settings.h"
 #include "launcher_ui.h"
 #include "launcher_update.h"
+#include "launcher_profiles.h"
+#include "launcher_cheats.h"
 #include "autorun_install.h"
 #include "steamgriddb.h"
 #include "dxvk_releases.h"
@@ -106,6 +108,8 @@ struct program
     char portrait_art[512];
     char hero_art[512];
     int removed;
+    int profile_cover;
+    unsigned int art_generation;
     enum icon_state icon_state;
     SDL_Texture *icon;
     int icon_width, icon_height;
@@ -123,7 +127,8 @@ struct icon_job
     int index;
     int kind;
     char path[512];
-    char artwork[512];
+    char artwork[768];
+    unsigned int generation;
 };
 
 struct icon_result
@@ -133,6 +138,7 @@ struct icon_result
     int width, height;
     unsigned char *rgba;
     int artwork;
+    unsigned int generation;
 };
 
 struct file_entry
@@ -425,13 +431,16 @@ static void load_program_settings( struct launcher *l, struct program *p )
     struct launcher_kv kv;
     size_t len;
 
+    launcher_profiles_recover( l->options->runtime_dir, p->path );
     p->own_files = 0;
+    p->profile_cover = 0;
     memset( &p->settings, 0, sizeof(p->settings) );
     p->settings.verbose = p->settings.profile = p->settings.framebuffer = -1;
     if (launcher_program_settings_path( l->options->runtime_dir, p->path, path, sizeof(path) ) &&
         launcher_kv_load( &kv, path ))
     {
         launcher_settings_read( &kv, &p->settings );
+        p->profile_cover = launcher_setting_state( &kv, "profile-cover" ) == 1;
         p->own_files |= kv.size && file_exists( path );
     }
     if (launcher_args_path( p->path, path, sizeof(path) )) p->own_files |= file_exists( path );
@@ -816,6 +825,7 @@ static int icon_thread( void *arg )
         }
         result.index = job.index;
         result.kind = job.kind;
+        result.generation = job.generation;
         result.width = icon.width;
         result.height = icon.height;
         result.rgba = icon.kind == LAUNCHER_ICON_RGBA ? icon.data : NULL;
@@ -887,6 +897,7 @@ static void pump_icons( struct launcher *l )
         struct program *p = &l->programs[results[i].index];
         SDL_Texture *texture = NULL;
 
+        if (results[i].generation != p->art_generation) { free( results[i].rgba ); continue; }
         if (results[i].rgba &&
             (texture = SDL_CreateTexture( l->ui.renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC,
                                           results[i].width, results[i].height )))
@@ -947,12 +958,26 @@ static void pump_icons( struct launcher *l )
     }
 }
 
+static void invalidate_art( struct program *p )
+{
+    p->art_generation++;
+    if (p->icon) SDL_DestroyTexture( p->icon );
+    if (p->square_icon) SDL_DestroyTexture( p->square_icon );
+    if (p->hero_icon) SDL_DestroyTexture( p->hero_icon );
+    p->icon = NULL; p->icon_state = ICON_UNKNOWN; p->icon_is_art = 0;
+    p->square_icon = p->hero_icon = NULL;
+    p->square_state = p->hero_state = ICON_UNKNOWN;
+}
+
 static void request_art( struct launcher *l, int index, enum art_kind kind )
 {
     struct program *p = &l->programs[index];
     enum icon_state *state = kind == ART_SQUARE ? &p->square_state : kind == ART_HERO ? &p->hero_state : &p->icon_state;
     const char *art = kind == ART_SQUARE ? p->square_art : kind == ART_HERO ? p->hero_art : p->portrait_art;
 
+    char settings[768], cover[768];
+    if (p->profile_cover && launcher_program_settings_path( l->options->runtime_dir, p->path, settings, sizeof(settings) ) &&
+        game_profile_cover_path( settings, cover, sizeof(cover) ) && file_exists( cover )) art = cover;
     p->icon_use = ++l->icon_use;
     if (*state != ICON_UNKNOWN || !l->thread) return;
     SDL_LockMutex( l->mutex );
@@ -960,6 +985,7 @@ static void request_art( struct launcher *l, int index, enum art_kind kind )
     {
         l->jobs[l->job_count].index = index;
         l->jobs[l->job_count].kind = kind;
+        l->jobs[l->job_count].generation = p->art_generation;
         memcpy( l->jobs[l->job_count].path, p->path, sizeof(p->path) );
         if (art[0])
             snprintf( l->jobs[l->job_count].artwork, sizeof(l->jobs[0].artwork), "%s",
@@ -1676,7 +1702,7 @@ enum program_row
     ROW_WINDOWS, ROW_D3D9, ROW_VKD3D_VERSION, ROW_DXVK_VERSION, ROW_DXVK_HUD, ROW_FRAME_LIMIT, ROW_VSYNC,
     ROW_LSFG, ROW_LSFG_DLL, ROW_LSFG_PERFORMANCE, ROW_LSFG_FLOW,
     ROW_ADDRESS, ROW_OWN_CONTROLS, ROW_CONTROLS, ROW_BOX64,
-    ROW_HIDE, ROW_LIBRARY, PROGRAM_ROWS
+    ROW_HIDE, ROW_LIBRARY, ROW_ADAPTATION, ROW_CHEATS, PROGRAM_ROWS
 };
 
 static int file_browser_pick( struct launcher *l, char *target, size_t size );
@@ -1815,15 +1841,17 @@ static void download_artwork( struct launcher *l, struct program *p )
     if (result != STEAMGRIDDB_OK)
     { ui_message( &l->ui, "Artwork download failed", steamgriddb_result_message( result ) ); return; }
 
+    char settings_path[768];
+    struct launcher_kv settings;
+    if (!launcher_program_settings_path( l->options->runtime_dir, p->path, settings_path, sizeof(settings_path) ) ||
+        !launcher_kv_load( &settings, settings_path ) || !launcher_kv_set( &settings, "profile-cover", "0" ) ||
+        !launcher_kv_save( &settings, settings_path ))
+    { ui_message( &l->ui, "封面设置未保存", "图片已下载，但无法保存封面选择，请检查存储空间。" ); return; }
+    p->profile_cover = 0;
     snprintf( p->square_art, sizeof(p->square_art), "%s", square );
     snprintf( p->portrait_art, sizeof(p->portrait_art), "%s", portrait );
     snprintf( p->hero_art, sizeof(p->hero_art), "%s", hero );
-    if (p->icon) SDL_DestroyTexture( p->icon );
-    if (p->square_icon) SDL_DestroyTexture( p->square_icon );
-    if (p->hero_icon) SDL_DestroyTexture( p->hero_icon );
-    p->icon = NULL; p->icon_state = ICON_UNKNOWN; p->icon_is_art = 0;
-    p->square_icon = p->hero_icon = NULL;
-    p->square_state = p->hero_state = ICON_UNKNOWN;
+    invalidate_art( p );
     save_library( l );
     snprintf( message, sizeof(message), "已为 %s 下载评分最高的方形、竖版和横幅图片。", matched );
     ui_message( &l->ui, "Artwork downloaded", message );
@@ -1885,6 +1913,16 @@ static int start_program( struct launcher *l, struct program *p, char *target, s
 {
     struct ui *ui = &l->ui;
     char path[512], text[160];
+
+    enum game_profile_result recovered = launcher_profiles_recover( l->options->runtime_dir, p->path );
+    if (recovered != GAME_PROFILE_OK)
+    {
+        ui_message( ui, "适配配置需要恢复", game_profile_error( recovered ) );
+        return 0;
+    }
+    if (!launcher_profiles_before_start( ui, l->options->runtime_dir, p->path )) return 0;
+    invalidate_art( p );
+    load_program_settings( l, p );
 
     if (!file_exists( p->path ) || l->options->machine_of( p->path, &p->machine ))
     {
@@ -2287,6 +2325,13 @@ static int program_menu( struct launcher *l, struct program *p, char *target, si
     struct ui *ui = &l->ui;
     char path[520], dir[512], line[896], global_line[896], name[128], buffer[64];
     struct program copy;
+    enum game_profile_result recovered = launcher_profiles_recover( l->options->runtime_dir, p->path );
+    if (recovered != GAME_PROFILE_OK)
+    {
+        ui_message( ui, "适配配置需要恢复", game_profile_error( recovered ) );
+        return 0;
+    }
+    load_program_settings( l, p );
 
     for (;;)
     {
@@ -2332,6 +2377,13 @@ static int program_menu( struct launcher *l, struct program *p, char *target, si
              snprintf( row->label, sizeof(row->label), "%s", (text) ); row->help = (help_text); } while (0)
 
         ADD_ROW( ROW_START, SECTION_GENERAL, "Start", "Runs the game." );
+        ADD_ROW( ROW_ADAPTATION, SECTION_GENERAL, "适配包更新",
+                 "手动选择适配包，可按名称筛选；绑定后检查并更新对应游戏配置和默认按键。" );
+        row->disabled = p->missing;
+        ADD_ROW( ROW_CHEATS, SECTION_GENERAL, "金手指",
+                 "此游戏的开关和数值设置；游戏效果尚未接入。" );
+        snprintf( row->value, sizeof(row->value), "设置" );
+
         ADD_ROW( ROW_FAVORITE, SECTION_GENERAL, "Favorite", "Keeps the game in the Favorites filter of the library." );
         row->kind = UI_ROW_SWITCH;
         row->on = p->favorite;
@@ -2547,6 +2599,19 @@ static int program_menu( struct launcher *l, struct program *p, char *target, si
                 break;
             }
             return start_program( l, p, target, size );
+
+        case ROW_CHEATS:
+            if (action == UI_ACTION_CHOOSE) launcher_cheats_open( ui, l->options->runtime_dir, p->path, p->title );
+            break;
+
+        case ROW_ADAPTATION:
+            if (action == UI_ACTION_CHOOSE)
+            {
+                launcher_profiles_open( ui, l->options->runtime_dir, p->path, p->title );
+                load_program_settings( l, p );
+                invalidate_art( p );
+            }
+            break;
 
         case ROW_FAVORITE:
             if (action != UI_ACTION_CHOOSE) break;
@@ -2784,7 +2849,7 @@ enum settings_row
 {
     SET_HIDDEN, SET_HIDE_MISSING, SET_DXVK_ON_ADD, SET_VERBOSE, SET_PROFILE, SET_WINDOWS,
     SET_CONTROLS, SET_STEAMGRIDDB,
-    SET_UPDATE, SET_REOPEN, SET_FORWARDER, SET_MAKE_32BIT, SET_MAKE_MAIN,
+    SET_UPDATE, SET_PROFILE_INDEX, SET_REOPEN, SET_FORWARDER, SET_MAKE_32BIT, SET_MAKE_MAIN,
     SET_CREDITS, SETTINGS_ROWS
 };
 
@@ -3208,6 +3273,7 @@ static void settings_menu( struct launcher *l )
             [SET_STEAMGRIDDB] = SET_SECTION_ARTWORK,
             [SET_REOPEN] = SET_SECTION_SYSTEM,
             [SET_UPDATE] = SET_SECTION_SYSTEM,
+            [SET_PROFILE_INDEX] = SET_SECTION_SYSTEM,
             [SET_FORWARDER] = SET_SECTION_SYSTEM, [SET_MAKE_32BIT] = SET_SECTION_SYSTEM,
             [SET_MAKE_MAIN] = SET_SECTION_SYSTEM,
             [SET_CREDITS] = SET_SECTION_SYSTEM,
@@ -3268,6 +3334,9 @@ static void settings_menu( struct launcher *l )
         rows[SET_UPDATE].adjustable = 0;
         rows[SET_UPDATE].disabled = !l->update;
         rows[SET_UPDATE].help = "Official Autorun releases, changelog and installation. Games and settings are preserved.";
+        snprintf( rows[SET_PROFILE_INDEX].label, sizeof(rows[0].label), "适配包管理" );
+        rows[SET_PROFILE_INDEX].kind = UI_ROW_ACTION; rows[SET_PROFILE_INDEX].adjustable = 0;
+        rows[SET_PROFILE_INDEX].help = "设置管理表地址、手动更新列表和开启游戏启动前自动更新。";
         snprintf( rows[SET_REOPEN].label, sizeof(rows[0].label), "Return here when a program ends" );
         snprintf( rows[SET_REOPEN].value, sizeof(rows[0].value), "%s", on_off[!!l->options->reopen_launcher] );
         rows[SET_REOPEN].kind = UI_ROW_SWITCH;
@@ -3334,6 +3403,10 @@ static void settings_menu( struct launcher *l )
         case SET_WINDOWS: l->options->framebuffer = !l->options->framebuffer; break;
         case SET_DXVK_ON_ADD: l->options->dxvk_on_add = !l->options->dxvk_on_add; break;
         case SET_REOPEN: l->options->reopen_launcher = !l->options->reopen_launcher; break;
+        case SET_PROFILE_INDEX:
+            if (action == UI_ACTION_CHOOSE) launcher_profiles_settings( ui, l->options->runtime_dir );
+            ui_start_screen( ui );
+            break;
         case SET_UPDATE:
             if (action == UI_ACTION_CHOOSE) launcher_update_open( l->update );
             ui_start_screen( ui );

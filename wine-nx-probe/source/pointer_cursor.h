@@ -21,6 +21,7 @@
 
 #define POINTER_CURSOR_STICK_MAX   32767.0 /* libnx JOYSTICK_MAX */
 #define POINTER_CURSOR_DEAD_ZONE   4000.0  /* about 12% of the stick range */
+#define POINTER_CURSOR_AIM_DEAD_ZONE 12000.0 /* movement around the character */
 #define POINTER_CURSOR_SPEED       1000.0  /* pixels per second at full tilt */
 #define POINTER_CURSOR_MAX_STEP_NS 50000000ull
 
@@ -53,6 +54,18 @@ static inline void pointer_cursor_place( struct pointer_cursor *c, double x, dou
 {
     c->x = x < 0 ? 0 : x > c->width - 1 ? c->width - 1 : x;
     c->y = y < 0 ? 0 : y > c->height - 1 ? c->height - 1 : y;
+}
+
+/* Place on a fixed-radius circle at the stick's continuous angle (y up).
+ * Return whether the stick is active; resting it leaves the cursor in place. */
+static inline int pointer_cursor_aim_circle( struct pointer_cursor *c, int stick_x, int stick_y,
+                                             double center_x, double center_y, double radius )
+{
+    double x = stick_x, y = stick_y, length = sqrt( x * x + y * y );
+
+    if (length <= POINTER_CURSOR_AIM_DEAD_ZONE || radius <= 0) return 0;
+    pointer_cursor_place( c, center_x + radius * x / length, center_y - radius * y / length );
+    return 1;
 }
 
 /* Move by the stick deflection (libnx axes: y up) held for elapsed_ns.

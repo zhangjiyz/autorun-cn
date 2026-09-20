@@ -27,6 +27,8 @@
 #include "launcher_catalog.h"
 #include "launcher_ui.h"
 #include "launcher_update.h"
+#include "launcher_profiles.h"
+#include "launcher_cheats.h"
 #include "dxvk_releases.h"
 
 static char script[256][300];
@@ -35,6 +37,22 @@ static char prompt_text[512];
 static int prompt_set;
 static const char *font_path;
 static unsigned char *font_data;
+
+/* The profile menu and transactions have their own composed host regression. */
+#ifndef LAUNCHER_REAL_PROFILES
+void launcher_profiles_settings( struct ui *ui, const char *root ) { (void)ui; (void)root; }
+int launcher_profiles_before_start( struct ui *ui, const char *root, const char *exe )
+{ (void)ui; (void)root; (void)exe; return 1; }
+void launcher_cheats_open( struct ui *ui, const char *root, const char *exe, const char *title )
+{ (void)ui; (void)root; (void)exe; (void)title; }
+int game_profile_cover_path( const char *settings, char *out, size_t size )
+{ return snprintf( out, size, "%s.profile-cover.png", settings ) < (int)size; }
+void launcher_profiles_open( struct ui *ui, const char *root, const char *exe, const char *title )
+{ (void)ui; (void)root; (void)exe; (void)title; }
+enum game_profile_result launcher_profiles_recover( const char *root, const char *exe )
+{ (void)root; (void)exe; return GAME_PROFILE_OK; }
+const char *game_profile_error( enum game_profile_result result ) { (void)result; return "profile error"; }
+#endif
 
 struct launcher_update *launcher_update_create( struct ui *ui, const char *root, int (*restart)(void) )
 {

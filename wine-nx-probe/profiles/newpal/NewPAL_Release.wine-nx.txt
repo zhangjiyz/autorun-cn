@@ -1,0 +1,7 @@
+d3d=dxvk
+own-controls=1
+controller=keyboard
+verbose=0
+window-fit=1
+sdl-audio=directsound
+sd-stat-cache=1

@@ -79,11 +79,11 @@ void wine_nx_runtime_trace( const char *msg );
 /* The time of day and the battery charge shown in the header. Returns the
  * LAUNCHER_STATUS_* bits for what it could read; the rest is left alone. */
 int launcher_platform_status( int *hour, int *minute, int *battery, int *charging );
+int launcher_platform_prompt( const char *header, const char *initial, char *out, size_t size );
 
 #ifndef __SWITCH__
 /* A host build (tests/launcher_host.c) supplies what the Switch build takes from libnx. */
 int launcher_platform_font( const void **data, size_t *size );
-int launcher_platform_prompt( const char *header, const char *initial, char *out, size_t size );
 #endif
 
 #endif

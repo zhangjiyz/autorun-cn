@@ -5115,7 +5115,7 @@ static void horizon_server_refresh_queue_locked( struct horizon_msgq *queue, uns
         external |= HORIZON_MSGQ_QS_POSTMESSAGE | HORIZON_MSGQ_QS_ALLPOSTMESSAGE;
     for (input = horizon_input_messages; input; input = input->next)
         if (input->tid == queue->tid)
-            external |= input->msg == HORIZON_WM_MOUSEMOVE ? HORIZON_MSGQ_QS_MOUSEMOVE : HORIZON_MSGQ_QS_MOUSEBUTTON;
+            external |= horizon_msgq_hardware_bit( input->msg );
     for (window = horizon_windows; window; window = window->next)
     {
         if (window->tid != queue->tid || !(window->style & HORIZON_WS_VISIBLE)) continue;
@@ -7646,6 +7646,16 @@ static int horizon_server_handle_send_keyboard( struct horizon_server_connection
     reply.header.error = status;
     pthread_mutex_unlock( &horizon_server_objects_mutex );
 
+    {
+        static unsigned int traced;
+        if (__atomic_fetch_add( &traced, 1, __ATOMIC_RELAXED ) < 48)
+        {
+            char line[192];
+            snprintf( line, sizeof(line), "[NXKEY] queue vk=%02x scan=%02x msg=%x focus=%08x raw=%08x legacy=%d err=%08x",
+                      kbd->vkey, kbd->scan, event.message, focus_handle, raw_handle, legacy, status );
+            wine_nx_runtime_trace( line );
+        }
+    }
     horizon_trace( "[HZINPUT] key vk=%02x scan=%02x flags=%x msg=%x focus=%08x raw=%08x legacy=%d err=%08x\n",
                    kbd->vkey, kbd->scan, kbd->flags, event.message, focus_handle, raw_handle, legacy, status );
     return horizon_server_write_reply( connection->reply_fd, &reply, sizeof(reply), NULL, 0 );
@@ -9153,6 +9163,16 @@ static int horizon_server_handle_get_message( struct horizon_server_connection *
     if (!found) return horizon_server_write_status( connection->reply_fd, HORIZON_STATUS_PENDING );
     if (reply.type == HORIZON_MSG_HARDWARE)
     {
+        static unsigned int traced_keys;
+        if (hardware.source.device == HORIZON_IMDT_KEYBOARD &&
+            __atomic_fetch_add( &traced_keys, 1, __ATOMIC_RELAXED ) < 48)
+        {
+            char line[192];
+            snprintf( line, sizeof(line), "[NXKEY] receive tid=%04x hwnd=%08x msg=%x vk=%llx lp=%llx remove=%d",
+                      connection->tid, reply.win, reply.msg, reply.wparam, reply.lparam,
+                      !!(request->flags & HORIZON_PM_REMOVE) );
+            wine_nx_runtime_trace( line );
+        }
         horizon_trace( "[HZINPUT] get_message id=%u hwnd=%08x msg=%x x=%d y=%d\n",
                        hardware.hw_id, reply.win, reply.msg, reply.x, reply.y );
         return horizon_server_write_reply( connection->reply_fd, &reply, sizeof(reply),

@@ -13,10 +13,40 @@
 
 #include "autorun_update.h"
 
-#define RELEASE_API "https://api.github.com/repos/danfromtico/autorun/releases/latest"
-#define DOWNLOAD_PREFIX "https://github.com/danfromtico/autorun/releases/download/"
+#define RELEASE_API "https://api.github.com/repos/" AUTORUN_DEFAULT_REPOSITORY "/releases/latest"
+#define DOWNLOAD_PREFIX "https://github.com/" AUTORUN_DEFAULT_REPOSITORY "/releases/download/"
 #define METADATA_MAX (1024u * 1024u)
 #define ARCHIVE_MAX (512u * 1024u * 1024u)
+
+static const struct autorun_update_source runtime_source = {
+    RELEASE_API, DOWNLOAD_PREFIX, "autorun.zip", "release.zip", ARCHIVE_MAX, 0
+};
+
+static int source_component( const char *text, size_t len )
+{
+    if (!len || len > 100 || text[0] == '.' || text[len - 1] == '.') return 0;
+    for (size_t i = 0; i < len; i++)
+        if (!((text[i] >= 'a' && text[i] <= 'z') || (text[i] >= 'A' && text[i] <= 'Z') ||
+              (text[i] >= '0' && text[i] <= '9') || text[i] == '-' || text[i] == '_' || text[i] == '.')) return 0;
+    return 1;
+}
+
+int autorun_profile_source( struct autorun_update_source *source, const char *repository, const char *tag )
+{
+    const char *slash;
+    if (!source || !repository || !(slash = strchr( repository, '/' )) ||
+        !source_component( repository, slash - repository ) ||
+        !source_component( slash + 1, strlen( slash + 1 ) ) ||
+        (tag && tag[0] && !source_component( tag, strlen( tag ) ))) return 0;
+    memset( source, 0, sizeof(*source) );
+    snprintf( source->api, sizeof(source->api), "https://api.github.com/repos/%s/releases/%s%s",
+              repository, tag && tag[0] ? "tags/" : "latest", tag ? tag : "" );
+    snprintf( source->prefix, sizeof(source->prefix), "https://github.com/%s/releases/download/", repository );
+    strcpy( source->asset, "autorun-profiles.zip" );
+    strcpy( source->cache, "profiles.zip" );
+    source->max_size = 16 * 1024 * 1024;
+    return 1;
+}
 
 struct memory_buffer
 {
@@ -384,12 +414,13 @@ static int canonical_asset( const struct asset *asset, const char *tag )
            (length > 0 && (size_t)length < sizeof(tagged) && !strcasecmp( asset->name, tagged ));
 }
 
-static int official_url( const char *url )
+static int official_url( const struct autorun_update_source *source, const char *url )
 {
-    return !strncmp( url, DOWNLOAD_PREFIX, sizeof(DOWNLOAD_PREFIX) - 1 );
+    return source->prefix[0] && !strncasecmp( url, source->prefix, strlen( source->prefix ) );
 }
 
-static int parse_assets( struct parser *p, const char *tag, struct asset *chosen )
+static int parse_assets( struct parser *p, const char *tag, struct asset *chosen,
+                         const struct autorun_update_source *source )
 {
     struct asset only = {0}, preferred = {0}, asset;
     unsigned int zip_count = 0, preferred_count = 0;
@@ -400,11 +431,12 @@ static int parse_assets( struct parser *p, const char *tag, struct asset *chosen
     for (;;)
     {
         if (!parse_asset( p, &asset )) return 0;
-        if (asset.fields == 15 && asset.digest[0] && asset.size && asset.size <= ARCHIVE_MAX && zip_name( asset.name ) && official_url( asset.url ))
+        if (asset.fields == 15 && asset.digest[0] && asset.size && asset.size <= source->max_size && zip_name( asset.name ) && official_url( source, asset.url ) &&
+            (source->asset[0] ? !strcmp( source->asset, asset.name ) : strcasecmp( asset.name, "autorun-profiles.zip" )))
         {
             zip_count++;
             only = asset;
-            if (canonical_asset( &asset, tag )) { preferred_count++; preferred = asset; }
+            if (source->asset[0] || canonical_asset( &asset, tag )) { preferred_count++; preferred = asset; }
         }
         whitespace( p );
         if (p->p < p->end && *p->p == ']') { p->p++; break; }
@@ -442,7 +474,8 @@ static int release_tag( const unsigned char *data, size_t size, char *tag, size_
     return found && p.p == p.end;
 }
 
-static int parse_release( const unsigned char *data, size_t size, struct autorun_release *release )
+static int parse_release( const unsigned char *data, size_t size, struct autorun_release *release,
+                          const struct autorun_update_source *source )
 {
     struct parser p;
     struct asset asset = {0};
@@ -465,7 +498,7 @@ static int parse_release( const unsigned char *data, size_t size, struct autorun
         else if (!strcmp( key, "body" )) { if (fields & 8) return 0; whitespace( &p ); if (!json_null( &p ) && !json_string( &p, release->notes, sizeof(release->notes) )) return 0; fields |= 8; }
         else if (!strcmp( key, "draft" )) { if ((fields & 16) || !json_bool( &p, &draft )) return 0; fields |= 16; }
         else if (!strcmp( key, "prerelease" )) { if ((fields & 32) || !json_bool( &p, &prerelease )) return 0; fields |= 32; }
-        else if (!strcmp( key, "assets" )) { if ((fields & 64) || !parse_assets( &p, tag, &asset )) return 0; fields |= 64; }
+        else if (!strcmp( key, "assets" )) { if ((fields & 64) || !parse_assets( &p, tag, &asset, source )) return 0; fields |= 64; }
         else if (!skip_value( &p )) return 0;
         whitespace( &p );
         if (p.p < p.end && *p.p == '}') { p.p++; break; }
@@ -480,7 +513,7 @@ static int parse_release( const unsigned char *data, size_t size, struct autorun
     return 1;
 }
 
-static enum autorun_update_result request_metadata( struct memory_buffer *body,
+static enum autorun_update_result request_metadata( const struct autorun_update_source *source, struct memory_buffer *body,
         autorun_update_progress callback, void *opaque )
 {
     CURL *curl;
@@ -494,8 +527,8 @@ static enum autorun_update_result request_metadata( struct memory_buffer *body,
     headers = curl_slist_append( headers, "Accept: application/vnd.github+json" );
     headers = curl_slist_append( headers, "X-GitHub-Api-Version: 2022-11-28" );
     if (!headers || !set_https_options( curl ) ||
-        curl_easy_setopt( curl, CURLOPT_TIMEOUT, 45L ) ||
-        curl_easy_setopt( curl, CURLOPT_URL, RELEASE_API ) ||
+        curl_easy_setopt( curl, CURLOPT_TIMEOUT, source->timeout_seconds ? source->timeout_seconds : 45L ) ||
+        curl_easy_setopt( curl, CURLOPT_URL, source->api ) ||
         curl_easy_setopt( curl, CURLOPT_HTTPHEADER, headers ) ||
         curl_easy_setopt( curl, CURLOPT_WRITEFUNCTION, receive_memory ) ||
         curl_easy_setopt( curl, CURLOPT_WRITEDATA, body ) ||
@@ -513,15 +546,16 @@ static enum autorun_update_result request_metadata( struct memory_buffer *body,
     return AUTORUN_UPDATE_OK;
 }
 
-enum autorun_update_result autorun_update_check( struct autorun_release *release,
+enum autorun_update_result autorun_update_check_source( const struct autorun_update_source *source,
+        struct autorun_release *release,
         autorun_update_progress callback, void *opaque )
 {
     struct memory_buffer body;
     enum autorun_update_result result;
 
-    if (!release) return AUTORUN_UPDATE_INVALID;
-    result = request_metadata( &body, callback, opaque );
-    if (result == AUTORUN_UPDATE_OK && !parse_release( body.data, body.size, release )) result = AUTORUN_UPDATE_INVALID;
+    if (!source || !release) return AUTORUN_UPDATE_INVALID;
+    result = request_metadata( source, &body, callback, opaque );
+    if (result == AUTORUN_UPDATE_OK && !parse_release( body.data, body.size, release, source )) result = AUTORUN_UPDATE_INVALID;
     free( body.data );
     return result;
 }
@@ -571,7 +605,8 @@ static int digest_matches( Sha256Context *context, const char *expected )
     return !strcasecmp( text, expected );
 }
 
-enum autorun_update_result autorun_update_download( const char *runtime_dir,
+enum autorun_update_result autorun_update_download_source( const struct autorun_update_source *source,
+        const char *runtime_dir,
         const struct autorun_release *release, char *path, size_t path_size,
         autorun_update_progress callback, void *opaque )
 {
@@ -582,14 +617,15 @@ enum autorun_update_result autorun_update_download( const char *runtime_dir,
     CURLcode code = CURLE_FAILED_INIT;
     long status = 0;
     enum autorun_update_result result = AUTORUN_UPDATE_NETWORK;
-    if (!release || !path || !path_size || !official_url( release->url ) ||
-        !release->size || release->size > ARCHIVE_MAX || strlen( release->digest ) != 64)
+    if (!source || !source_component( source->cache, strlen( source->cache ) ) ||
+        !release || !path || !path_size || !official_url( source, release->url ) ||
+        !release->size || release->size > source->max_size || release->size > ARCHIVE_MAX || strlen( release->digest ) != 64)
         return AUTORUN_UPDATE_INVALID;
     path[0] = 0;
     for (size_t i = 0; i < 64; i++) if (!isxdigit( (unsigned char)release->digest[i] )) return AUTORUN_UPDATE_INVALID;
     if (!make_updates( runtime_dir, folder, sizeof(folder) )) return AUTORUN_UPDATE_IO;
-    if ((size_t)snprintf( part, sizeof(part), "%s/release.zip.part", folder ) >= sizeof(part) ||
-        (size_t)snprintf( final, sizeof(final), "%s/release.zip", folder ) >= sizeof(final) ||
+    if ((size_t)snprintf( part, sizeof(part), "%s/%s.part", folder, source->cache ) >= sizeof(part) ||
+        (size_t)snprintf( final, sizeof(final), "%s/%s", folder, source->cache ) >= sizeof(final) ||
         strlen( final ) >= path_size)
         return AUTORUN_UPDATE_INVALID;
     remove( part );
@@ -599,6 +635,7 @@ enum autorun_update_result autorun_update_download( const char *runtime_dir,
     if (!(stream.file = fopen( part, "wb" ))) return AUTORUN_UPDATE_IO;
     if (curl_global_init( CURL_GLOBAL_DEFAULT ) == CURLE_OK && (curl = curl_easy_init()) &&
         set_https_options( curl ) &&
+        !curl_easy_setopt( curl, CURLOPT_TIMEOUT, source->timeout_seconds ? source->timeout_seconds : 900L ) &&
         !curl_easy_setopt( curl, CURLOPT_URL, release->url ) &&
         !curl_easy_setopt( curl, CURLOPT_WRITEFUNCTION, receive_file ) &&
         !curl_easy_setopt( curl, CURLOPT_WRITEDATA, &stream ) &&
@@ -625,6 +662,72 @@ enum autorun_update_result autorun_update_download( const char *runtime_dir,
     }
     if (result != AUTORUN_UPDATE_OK) remove( part );
     return result;
+}
+
+int autorun_https_url( const char *url )
+{
+    if (!url || strncmp( url, "https://", 8 ) || !url[8] || url[8] == '/' || strlen( url ) >= 768) return 0;
+    for (const unsigned char *p = (const void *)url; *p; p++) if (*p <= 32 || *p >= 127 || *p == '\\' || *p == '#' || *p == '@') return 0;
+    return 1;
+}
+
+enum autorun_update_result autorun_update_text( const char *url, char **text, size_t *size,
+        long timeout_seconds, autorun_update_progress progress, void *opaque )
+{
+    struct autorun_update_source source = {0};
+    struct memory_buffer body = {0};
+    *text = NULL; *size = 0;
+    if (!autorun_https_url( url ) || strlen( url ) >= sizeof(source.api)) return AUTORUN_UPDATE_INVALID;
+    strcpy( source.api, url ); source.timeout_seconds = timeout_seconds;
+    enum autorun_update_result result = request_metadata( &source, &body, progress, opaque );
+    if (result == AUTORUN_UPDATE_OK && (!body.size || memchr( body.data, 0, body.size ))) result = AUTORUN_UPDATE_INVALID;
+    if (result == AUTORUN_UPDATE_OK) { *text = (char *)body.data; *size = body.size; }
+    else free( body.data );
+    return result;
+}
+
+int autorun_file_matches( const char *path, unsigned long long size, const char *digest )
+{
+    unsigned char buffer[16384];
+    Sha256Context hash; unsigned long long used = 0;
+    size_t n;
+    FILE *file = fopen( path, "rb" );
+    if (!file) return 0;
+    sha256ContextCreate( &hash );
+    while ((n = fread( buffer, 1, sizeof(buffer), file )))
+    {
+        used += n;
+        if (used > size) { fclose( file ); return 0; }
+        sha256ContextUpdate( &hash, buffer, n );
+    }
+    int ok = used == size && !ferror( file ) && digest_matches( &hash, digest );
+    fclose( file ); return ok;
+}
+
+enum autorun_update_result autorun_update_file( const char *url, unsigned long long size, const char *digest,
+        const char *root, char *path, size_t capacity, long timeout_seconds,
+        autorun_update_progress progress, void *opaque )
+{
+    struct autorun_update_source source = {0};
+    struct autorun_release release = {0};
+    if (!autorun_https_url( url ) || strlen( digest ) != 64) return AUTORUN_UPDATE_INVALID;
+    strcpy( source.prefix, "https://" ); strcpy( source.cache, "profile-selected.zip" );
+    source.max_size = 16 * 1024 * 1024; source.timeout_seconds = timeout_seconds;
+    strcpy( release.url, url ); strcpy( release.digest, digest ); release.size = size;
+    return autorun_update_download_source( &source, root, &release, path, capacity, progress, opaque );
+}
+
+enum autorun_update_result autorun_update_check( struct autorun_release *release,
+        autorun_update_progress callback, void *opaque )
+{
+    return autorun_update_check_source( &runtime_source, release, callback, opaque );
+}
+
+enum autorun_update_result autorun_update_download( const char *runtime_dir,
+        const struct autorun_release *release, char *path, size_t path_size,
+        autorun_update_progress callback, void *opaque )
+{
+    return autorun_update_download_source( &runtime_source, runtime_dir, release, path, path_size, callback, opaque );
 }
 
 const char *autorun_update_error( enum autorun_update_result result )

@@ -21,6 +21,8 @@
 #include "sd_read_cache.h"
 
 /* Reported by the runtime's [PROGRESS] line. */
+int wine_nx_sd_stat_cache;             /* per-game opt-in, immutable read-only files */
+unsigned int wine_nx_sd_stat_queries, wine_nx_sd_stat_hits;
 unsigned int wine_nx_sd_reads;         /* read requests sent to the FS service */
 unsigned int wine_nx_sd_hits;          /* reads the cache served without one */
 unsigned long long wine_nx_sd_read_ns; /* time spent in those requests */
@@ -159,6 +161,35 @@ static ssize_t sd_cache_read_file( struct _reent *r, void *fd, char *ptr, size_t
     return (ssize_t)got;  /* -1 keeps the errno of the failed request */
 }
 
+static int sd_cache_query_stat( void *ctx, struct stat *st )
+{
+    struct sd_cache_fill_ctx *query = ctx;
+    return sd_cache_base->fstat_r( query->r, query->fd, st );
+}
+
+static int sd_cache_fstat( struct _reent *r, void *fd, struct stat *st )
+{
+    struct sd_cache_fill_ctx ctx = { r, fd };
+    struct stat copy;
+    struct sd_cache_file *file;
+    unsigned int queries = 0;
+    int ret;
+
+    if (!wine_nx_sd_stat_cache)
+    {
+        __atomic_add_fetch( &wine_nx_sd_stat_queries, 1, __ATOMIC_RELAXED );
+        return sd_cache_base->fstat_r( r, fd, st );
+    }
+    pthread_mutex_lock( &sd_cache_mutex );
+    file = !sd_cache_off ? sd_cache_find( sd_cache_files, fd ) : NULL;
+    ret = sd_cache_read_stat( file, &copy, sd_cache_query_stat, &ctx, &queries );
+    pthread_mutex_unlock( &sd_cache_mutex );
+    __atomic_add_fetch( &wine_nx_sd_stat_queries, queries, __ATOMIC_RELAXED );
+    if (!queries) __atomic_add_fetch( &wine_nx_sd_stat_hits, 1, __ATOMIC_RELAXED );
+    if (!ret) *st = copy; /* Do not fault on the caller's buffer with the lock held. */
+    return ret;
+}
+
 static int sd_cache_rename( struct _reent *r, const char *old_name, const char *new_name )
 {
     pthread_mutex_lock( &sd_cache_mutex );
@@ -198,6 +229,7 @@ int wine_nx_sd_cache_install(void)
     sd_cache_device.open_r = sd_cache_open;
     sd_cache_device.close_r = sd_cache_close;
     sd_cache_device.read_r = sd_cache_read_file;
+    if (sd_cache_base->fstat_r) sd_cache_device.fstat_r = sd_cache_fstat;
     if (sd_cache_base->rename_r) sd_cache_device.rename_r = sd_cache_rename;
     if (sd_cache_base->unlink_r) sd_cache_device.unlink_r = sd_cache_unlink;
     if (sd_cache_base->ftruncate_r) sd_cache_device.ftruncate_r = sd_cache_ftruncate;

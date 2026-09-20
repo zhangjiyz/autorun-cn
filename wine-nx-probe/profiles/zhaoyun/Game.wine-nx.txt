@@ -1,0 +1,7 @@
+own-controls=1
+aspect-fit=800x600
+touch-coordinates=screen
+left-stick-run=shift
+left-stick-eight-way=1
+left-stick-aim=140
+left-stick-move=mouse

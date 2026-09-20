@@ -7,7 +7,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
-from dxvk_payload import DLLS, REVISION, VERSION, digest, validate_payload
+from dxvk_payload import DLLS, REVISION, VERSION, digest, validate_payload, say_directx9
 
 
 with tempfile.TemporaryDirectory(prefix='wine-nx-dxvk-') as temp:
@@ -64,4 +64,26 @@ with tempfile.TemporaryDirectory(prefix='wine-nx-dxvk-') as temp:
     save()
     rejects()
 
-print('PASS: pinned DXVK payload, AMD64 machine, PE32+, DLL bit, hashes and licenses')
+    # x86 payloads must pass only the x86 validator, never the AMD64 packager.
+    struct.pack_into('<H', image, 132, 0x14c)
+    struct.pack_into('<H', image, 152, 0x10b)
+    for name in DLLS:
+        (directory / name).write_bytes(image)
+    manifest.update(architecture='x86', licenses=['test.txt'],
+                    files={name: digest(directory / name) for name in DLLS})
+    save()
+    validate_payload(directory, 'x86')
+    rejects()
+    (directory / 'dxgi.dll').write_bytes(image + b'changed')
+    try:
+        validate_payload(directory, 'x86')
+    except ValueError:
+        pass
+    else:
+        raise AssertionError('accepted corrupt x86 payload')
+    resource = directory / 'version.dll'
+    resource.write_bytes(b'\xbd\x04\xef\xfe' + bytes(28) + '10.0.17763.1'.encode('utf-16-le'))
+    say_directx9(resource)
+    assert struct.unpack_from('<IIII', resource.read_bytes(), 8) == (0x50003, 0x10388, 0x50003, 0x10388)
+
+print('PASS: pinned DXVK, x86/AMD64 separation, PE headers, hashes, licenses and legacy D3D9 version')

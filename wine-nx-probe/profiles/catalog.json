@@ -1,0 +1,27 @@
+{
+  "schema": 2,
+  "profiles": [
+    {
+      "id": "newpal",
+      "name": "新仙剑奇侠传（NewPAL 2.17.102.0）",
+      "version": 2,
+      "min_api": 2,
+      "keywords": "新仙剑 新仙劍 NewPAL PAL xinxianjian",
+      "description": "适用于 NewPAL_Release.exe 2.17.102.0。键盘方向键、窗口居中、DirectSound 音效及菜单文件状态缓存。",
+      "settings": "newpal/NewPAL_Release.wine-nx.txt",
+      "keys": "newpal/NewPAL_Release.keys.txt",
+      "cheats": "newpal/cheats.json"
+    },
+    {
+      "id": "zhaoyun-2002ls",
+      "name": "三国赵云传（2002ls 补丁版）",
+      "version": 2,
+      "min_api": 2,
+      "keywords": "三国赵云传 三國趙雲傳 ZhaoYun zhaoyunzhuan",
+      "description": "仅适用于已运行 profiles/zhaoyun/patch-game.py 的 2002ls Game.exe。左摇杆圆周鼠标移动、4:3 居中及专用按键。本包不会修改 EXE，请先自行完成补丁。",
+      "settings": "zhaoyun/Game.wine-nx.txt",
+      "keys": "zhaoyun/Game.keys.txt",
+      "cheats": "zhaoyun/cheats.json"
+    }
+  ]
+}

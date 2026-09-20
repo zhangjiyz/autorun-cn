@@ -25,6 +25,7 @@
 #include "unix_private.h"
 #include "horizon_private.h"
 #include "launcher.h"
+#include "launcher_profiles.h"
 #include "autorun_install.h"
 #include "forwarder.h"
 #include "launcher_list.h"
@@ -67,9 +68,9 @@ u32 __nx_exception_ignoredebug = 1;
 #define CONFIG_FILE CONFIG_DIR "/settings.json"
 #define DEFAULT_TARGET WINE_DRIVE_C "/curl/curl.exe"
 #ifdef WINE_NX_AMD64
-#define WINE_NX_RUNTIME_BUILD "nx-amd64-box64-15"
+#define WINE_NX_RUNTIME_BUILD "nx-amd64-box64-24"
 #elif defined(WINE_NX_BOX64_DYNAREC)
-#define WINE_NX_RUNTIME_BUILD "nx-wow64-dynarec-218"
+#define WINE_NX_RUNTIME_BUILD "nx-wow64-dynarec-227"
 #else
 #define WINE_NX_RUNTIME_BUILD "nx-wow64-console-11"
 #endif
@@ -450,6 +451,8 @@ static int wine_nx_gl_window;  /* an OpenGL window surface owns the screen's NWi
 /* The chosen program's 4:3 image in the top-left of the OpenGL back buffer.
  * Its output is enlarged by winnx_opengl.c; touch normally uses the inverse map. */
 int wine_nx_aspect_source_width, wine_nx_aspect_source_height;
+int wine_nx_window_fit;
+static int wine_nx_window_origin_x, wine_nx_window_origin_y;
 static struct wine_nx_aspect_rect wine_nx_aspect_shown;
 /* Some games read GetCursorPos in desktop coordinates even when their image
  * is presented from a smaller back buffer. Keep touch in desktop coordinates
@@ -479,6 +482,31 @@ static int wine_nx_pointer_placed;
 static int wine_nx_touch_held, wine_nx_touch_x, wine_nx_touch_y, wine_nx_touch_dx, wine_nx_touch_dy;
 /* The position Wine last had, from a take or the program's SetCursorPos. */
 static int wine_nx_pointer_sent_x = WINE_NX_FB_W / 2, wine_nx_pointer_sent_y = WINE_NX_FB_H / 2;
+
+/* Called by the framebuffer presenter with the actual client size and desktop
+ * origin. The image and touch share this rectangle, including window borders. */
+int wine_nx_window_fit_update( int width, int height, int origin_x, int origin_y,
+                               struct wine_nx_aspect_rect *shown )
+{
+    int changed;
+    if (!wine_nx_window_fit ||
+        !wine_nx_aspect_fit_rect( width, height, WINE_NX_FB_W, WINE_NX_FB_H, shown )) return 0;
+    pthread_mutex_lock( &wine_nx_pointer_mutex );
+    changed = wine_nx_aspect_source_width != width || wine_nx_aspect_source_height != height ||
+              wine_nx_window_origin_x != origin_x || wine_nx_window_origin_y != origin_y;
+    wine_nx_aspect_source_width = width;
+    wine_nx_aspect_source_height = height;
+    wine_nx_aspect_shown = *shown;
+    wine_nx_window_origin_x = origin_x;
+    wine_nx_window_origin_y = origin_y;
+    wine_nx_pointer.width = width + origin_x;
+    wine_nx_pointer.height = height + origin_y;
+    wine_nx_touch_screen_coordinates = 0;
+    pthread_mutex_unlock( &wine_nx_pointer_mutex );
+    if (changed) log_line( "[NXWINDOW] client %dx%d origin=%d,%d -> %dx%d at %d,%d",
+                           width, height, origin_x, origin_y, shown->width, shown->height, shown->x, shown->y );
+    return 1;
+}
 
 /* Take the screen from the text console and bring up a linear framebuffer. */
 int wine_nx_fb_init(void)
@@ -772,6 +800,8 @@ unsigned int wine_nx_pad_key_state;
 
 /* When a program last read the controller through XInput (xinput_unix.c). */
 extern u64 wine_nx_xinput_last_poll;
+extern int wine_nx_force_keyboard;
+extern int wine_nx_sd_stat_cache;
 
 /* How long + and - must be held together before the program is closed. */
 #define WINE_NX_QUIT_CHORD_NS 1000000000ull
@@ -821,7 +851,8 @@ int wine_nx_pointer_poll( int *x, int *y, unsigned int *buttons )
     /* A program reading the controller through XInput gets it whole: no keys,
      * clicks or cursor come from it meanwhile. The touchscreen still points. */
     xinput_poll = wine_nx_xinput_last_poll;
-    gamepad = xinput_poll && (xinput_poll >= now || armTicksToNs( now - xinput_poll ) < 1000000000ull);
+    gamepad = !__atomic_load_n( &wine_nx_force_keyboard, __ATOMIC_RELAXED ) &&
+              xinput_poll && (xinput_poll >= now || armTicksToNs( now - xinput_poll ) < 1000000000ull);
     moved = 0;
     touching = hidGetTouchScreenStates( &touch, 1 ) && touch.count > 0;
     if (touching)
@@ -837,6 +868,11 @@ int wine_nx_pointer_poll( int *x, int *y, unsigned int *buttons )
                                                wine_nx_aspect_shown.width, wine_nx_aspect_source_width );
                 touch_y = wine_nx_aspect_map( touch_y, wine_nx_aspect_shown.y,
                                                wine_nx_aspect_shown.height, wine_nx_aspect_source_height );
+            }
+            if (wine_nx_window_fit)
+            {
+                touch_x += wine_nx_window_origin_x;
+                touch_y += wine_nx_window_origin_y;
             }
             pointer_cursor_place( &wine_nx_pointer, touch_x, touch_y );
             moved = (int)wine_nx_pointer.x != old_x || (int)wine_nx_pointer.y != old_y;
@@ -936,6 +972,11 @@ int wine_nx_pointer_poll( int *x, int *y, unsigned int *buttons )
                 if (steer.y < -12000) ydir = -1;
             }
             steering = xdir || ydir;
+            /* Mouse movement follows the raw angle, independently of the
+             * eight keyboard sectors, with the same radial movement dead zone. */
+            if (wine_nx_left_stick_mouse_move && !(held & HidNpadButton_StickL))
+                steering = (double)steer.x * steer.x + (double)steer.y * steer.y >
+                           POINTER_CURSOR_AIM_DEAD_ZONE * POINTER_CURSOR_AIM_DEAD_ZONE;
             mouse_steer = wine_nx_left_stick_mouse_move && steering &&
                           !(held & HidNpadButton_StickL) && !gamepad;
 
@@ -960,7 +1001,13 @@ int wine_nx_pointer_poll( int *x, int *y, unsigned int *buttons )
                 int aim_y = wine_nx_aspect_shown.y + wine_nx_aspect_shown.height * 5 / 12 - ydir * distance;
                 int old_x = (int)wine_nx_pointer.x, old_y = (int)wine_nx_pointer.y;
 
-                pointer_cursor_place( &wine_nx_pointer, aim_x, aim_y );
+                if (mouse_steer)
+                    pointer_cursor_aim_circle( &wine_nx_pointer, steer.x, steer.y,
+                                              wine_nx_aspect_shown.x + wine_nx_aspect_shown.width / 2,
+                                              wine_nx_aspect_shown.y + wine_nx_aspect_shown.height * 5 / 12,
+                                              radius );
+                else
+                    pointer_cursor_place( &wine_nx_pointer, aim_x, aim_y );
                 if ((int)wine_nx_pointer.x != old_x || (int)wine_nx_pointer.y != old_y)
                 {
                     moved = 1;
@@ -1232,6 +1279,7 @@ static void runtime_report_interpreter(void)
         extern unsigned int wine_nx_syscalls __attribute__((weak));
         extern unsigned int wine_nx_audio_underruns __attribute__((weak));
         extern unsigned int wine_nx_sd_reads, wine_nx_sd_hits;
+        extern unsigned int wine_nx_sd_stat_queries, wine_nx_sd_stat_hits;
         extern unsigned long long wine_nx_sd_read_ns;
         extern unsigned int wine_nx_gl_swaps __attribute__((weak)), wine_nx_gl_calls __attribute__((weak));
         extern unsigned int wine_nx_vk_presents __attribute__((weak));
@@ -1378,12 +1426,14 @@ static void runtime_report_interpreter(void)
         unsigned long long heap_size = (unsigned long long)(fake_heap_end - fake_heap_start);
         unsigned long long heap_free = heap.fordblks + (heap_size > heap.arena ? heap_size - heap.arena : 0);
 
-        log_line( "[PROGRESS] %llus reads=%u read_ms=%llu sd_reads=%u sd_ms=%llu cache_hits=%u syscalls=%u "
+        log_line( "[PROGRESS] %llus reads=%u read_ms=%llu sd_reads=%u sd_ms=%llu cache_hits=%u stat_queries=%u stat_hits=%u syscalls=%u "
                   "frames=%u heap_used_mb=%llu heap_free_mb=%llu%s%s%s%s",
                   (unsigned long long)(armTicksToNs( now - start ) / 1000000000ull), reads, read_ms,
                   __atomic_load_n( &wine_nx_sd_reads, __ATOMIC_RELAXED ),
                   __atomic_load_n( &wine_nx_sd_read_ns, __ATOMIC_RELAXED ) / 1000000,
-                  __atomic_load_n( &wine_nx_sd_hits, __ATOMIC_RELAXED ), syscalls, frames,
+                  __atomic_load_n( &wine_nx_sd_hits, __ATOMIC_RELAXED ),
+                  __atomic_load_n( &wine_nx_sd_stat_queries, __ATOMIC_RELAXED ),
+                  __atomic_load_n( &wine_nx_sd_stat_hits, __ATOMIC_RELAXED ), syscalls, frames,
                   (unsigned long long)heap.uordblks >> 20, heap_free >> 20, systop, native, gl, audio );
         {
             extern void wine_nx_thread_report( void );
@@ -1728,7 +1778,7 @@ static RTL_USER_PROCESS_PARAMETERS *runtime_create_process_params( const char *t
     WCHAR *cursor;
     const char *cmdline_str, *dxvk_hud = launcher_hud_values[runtime_dxvk_hud];
     char dxvk_dir[96], vkd3d_dir[96], vkd3d_path[104] = "", graphics_path[208] = "";
-    int cmdline_len;
+    int cmdline_len, sdl_directsound = 0;
     int dxvk_path = launcher_dxvk_version_directory( main_image_info.Machine, runtime_dxvk_version,
                                                      dxvk_dir, sizeof(dxvk_dir) );
 
@@ -1780,16 +1830,37 @@ static RTL_USER_PROCESS_PARAMETERS *runtime_create_process_params( const char *t
         int own = -1;
 
         pthread_mutex_lock( &wine_nx_pointer_mutex );
+        wine_nx_sd_stat_cache = 0;
+        wine_nx_window_fit = 0;
         wine_nx_left_stick_shift_run = 0;
         wine_nx_left_stick_eight_way = 0;
         wine_nx_left_stick_aim_radius = 0;
         wine_nx_left_stick_mouse_move = 0;
+        __atomic_store_n( &wine_nx_force_keyboard, 0, __ATOMIC_RELAXED );
         pthread_mutex_unlock( &wine_nx_pointer_mutex );
         if (target[1] != ':' &&
             launcher_program_settings_path( RUNTIME_DIR, target, settings_path, sizeof(settings_path) ) &&
             launcher_kv_load( &kv, settings_path ) && kv.size)
         {
             launcher_settings_read( &kv, &settings );
+            wine_nx_sd_stat_cache = launcher_kv_get_int( &kv, "sd-stat-cache", 0 ) == 1;
+            if (wine_nx_sd_stat_cache) log_line( "[SDCACHE] read-only file metadata cache enabled" );
+            wine_nx_window_fit = launcher_kv_get_int( &kv, "window-fit", 0 ) == 1;
+            {
+                char audio[32] = "";
+                sdl_directsound = launcher_kv_get( &kv, "sdl-audio", audio, sizeof(audio) ) &&
+                                  !strcasecmp( audio, "directsound" );
+                if (sdl_directsound) log_line( "[NXAUDIO] SDL_AUDIODRIVER=directsound" );
+            }
+            if (wine_nx_window_fit) log_line( "[NXWINDOW] fit actual client framebuffer to screen" );
+            {
+                char controller[32] = "";
+                int keyboard = launcher_kv_get( &kv, "controller", controller, sizeof(controller) ) &&
+                               !strcasecmp( controller, "keyboard" );
+                __atomic_store_n( &wine_nx_force_keyboard, keyboard, __ATOMIC_RELAXED );
+                if (keyboard)
+                    log_line( "[NXINPUT] forced keyboard mapping; XInput controller hidden" );
+            }
             {
                 char left_stick_run[32] = "";
                 int eight_way = launcher_kv_get_int( &kv, "left-stick-eight-way", 0 ) == 1;
@@ -1813,7 +1884,7 @@ static RTL_USER_PROCESS_PARAMETERS *runtime_create_process_params( const char *t
                 if (shift_run) log_line( "[NXINPUT] left stick holds Shift to run; L3 walks" );
                 if (eight_way) log_line( "[NXINPUT] left stick eight-way sectors enabled" );
                 if (aim_radius) log_line( "[NXINPUT] left stick aim radius=%d", aim_radius );
-                if (mouse_move) log_line( "[NXINPUT] left stick holds mouse button to move; L3 uses arrows" );
+                if (mouse_move) log_line( "[NXINPUT] left stick uses continuous circle aim and holds mouse button to move; L3 uses arrows" );
             }
             {
                 char aspect[32] = "", touch_coordinates[32] = "", extra;
@@ -1892,6 +1963,7 @@ static RTL_USER_PROCESS_PARAMETERS *runtime_create_process_params( const char *t
     chars += strlen( dos_path ) + 1;
     chars += strlen( nt_path ) + 1;
     chars += sizeof(runtime_environment) + strlen( graphics_path ) + strlen( dxvk_hud ) - 1;
+    if (sdl_directsound) chars += sizeof("SDL_AUDIODRIVER=directsound");
     size = sizeof(*params) + chars * sizeof(WCHAR);
 
     if (!(params = calloc( 1, size ))) return NULL;
@@ -1929,6 +2001,11 @@ static RTL_USER_PROCESS_PARAMETERS *runtime_create_process_params( const char *t
             for (i = 0; graphics_path[i]; i++) *cursor++ = (unsigned char)graphics_path[i];
         }
         do *cursor++ = (unsigned char)*value; while (*value++);
+        if (sdl_directsound && !strncmp( entry, "PATH=", 5 ))
+        {
+            value = "SDL_AUDIODRIVER=directsound";
+            do *cursor++ = (unsigned char)*value; while (*value++);
+        }
     }
     *cursor++ = 0;
     params->EnvironmentSize = (cursor - (WCHAR *)params->Environment) * sizeof(WCHAR);
@@ -3677,6 +3754,42 @@ int main( int argc, char **argv )
             return 0;
         }
         autorun = 1;
+    }
+
+    /* Command-line and forwarder launches must also recover an interrupted
+     * profile transaction before reading the per-game settings. */
+    if (target[1] != ':' && launcher_profiles_recover( RUNTIME_DIR, target ) != GAME_PROFILE_OK)
+    {
+        log_line( "[PROFILE] cannot restore interrupted adaptation install for %s; launch stopped", target );
+        leave_cleanly();
+        return 1;
+    }
+
+    if (target[1] != ':' && !launcher_profiles_before_start( NULL, RUNTIME_DIR, target ))
+    {
+        log_line( "[PROFILE] recovery failed after automatic check; launch stopped" );
+        leave_cleanly(); return 1;
+    }
+
+    /* The framework resolves the per-executable selections. A game-specific
+     * backend must explicitly implement game_cheat_apply before effects run. */
+    if (target[1] != ':')
+    {
+        char path[768];
+        struct game_cheats *cheats = calloc( 1, sizeof(*cheats) );
+        struct launcher_kv state;
+        if (cheats && launcher_program_settings_path( RUNTIME_DIR, target, path, sizeof(path) ))
+        {
+            enum game_profile_result read = game_profile_cheats_read( path, cheats, &state );
+            if (read == GAME_PROFILE_OK)
+            {
+                struct game_cheat_dispatch_result dispatch = game_cheats_dispatch( cheats, &state, NULL, NULL );
+                if (cheats->count) log_line( "[CHEATS] entries=%d enabled=%d requested=%d applied=%d unavailable=%d (framework only)",
+                    cheats->count, game_cheats_enabled( &state ), dispatch.requested, dispatch.applied, dispatch.unavailable );
+            }
+            else log_line( "[CHEATS] cannot read definitions/options for %s: %d; effects disabled", target, read );
+        }
+        free( cheats );
     }
 
     /* From here a thread may be asked to end; this one comes back here. */

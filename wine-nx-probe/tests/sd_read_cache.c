@@ -210,6 +210,54 @@ static void test_open_files(void)
     free( f.data );
 }
 
+static int fake_stat( void *ctx, struct stat *st )
+{
+    struct fake_file *f = ctx;
+    f->requests++;
+    if (f->fail) return -1;
+    memset( st, 0, sizeof(*st) );
+    st->st_size = f->size;
+    st->st_mtime = 123;
+    return 0;
+}
+
+static void test_readonly_metadata(void)
+{
+    struct sd_cache_pool pool = {0, 64};
+    struct sd_cache_file *list = NULL, *reader, *writer;
+    struct fake_file f = {0};
+    struct stat st;
+    unsigned int queries = 0, i;
+    f.size = 123456;
+    reader = sd_cache_opened( &list, &pool, (void *)1, "sdmc:/Data/ALL.SND", 0 );
+    f.fail = 1;
+    assert( sd_cache_read_stat( reader, &st, fake_stat, &f, &queries ) == -1 && !reader->stat_valid );
+    f.fail = 0;
+    for (i = 0; i < 10000; i++)
+    {
+        assert( !sd_cache_read_stat( reader, &st, fake_stat, &f, &queries ) );
+        assert( st.st_size == 123456 && st.st_mtime == 123 );
+    }
+    assert( queries == 2 && f.requests == 2 ); /* failed once, then fetched once */
+    writer = sd_cache_opened( &list, &pool, (void *)2, "/data/all.snd", 1 );
+    assert( writer && !reader->stat_valid && !reader->cacheable );
+    f.size = 654321;
+    assert( !sd_cache_read_stat( reader, &st, fake_stat, &f, &queries ) && st.st_size == f.size );
+    assert( !sd_cache_read_stat( writer, &st, fake_stat, &f, &queries ) && !writer->stat_valid );
+    assert( queries == 4 );
+    sd_cache_closed( &list, &pool, (void *)1 );
+    sd_cache_closed( &list, &pool, (void *)2 );
+    reader = sd_cache_opened( &list, &pool, (void *)1, "/data/all.snd", 0 );
+    assert( !reader->stat_valid ); /* per-open pointer reused */
+    assert( !sd_cache_read_stat( reader, &st, fake_stat, &f, &queries ) && reader->stat_valid );
+    sd_cache_forget_path( list, &pool, "/data/all.snd" ); /* rename, unlink or truncate */
+    f.size = 99;
+    assert( !reader->stat_valid && !sd_cache_read_stat( reader, &st, fake_stat, &f, &queries ) && st.st_size == 99 );
+    assert( !sd_cache_read_stat( NULL, &st, fake_stat, &f, &queries ) ); /* untracked / disabled */
+    sd_cache_closed( &list, &pool, (void *)1 );
+    assert( !list );
+}
+
 int main(void)
 {
     test_sprite_reads();
@@ -217,6 +265,7 @@ int main(void)
     test_least_recently_used();
     test_failures_and_memory();
     test_open_files();
+    test_readonly_metadata();
     puts( "SD read cache: sprite reads, end of file, least recently used, failures, memory limit and open "
           "files passed" );
     return 0;

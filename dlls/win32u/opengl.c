@@ -37,6 +37,12 @@
 #include "ntuser_private.h"
 
 #include "wine/opengl_driver.h"
+#ifdef __SWITCH__
+#include "wine/nx_aspect_fit.h"
+extern int wine_nx_window_fit;
+extern int wine_nx_window_fit_update( int width, int height, int origin_x, int origin_y,
+                                      struct wine_nx_aspect_rect *shown );
+#endif
 
 #include "dibdrv/dibdrv.h"
 
@@ -738,6 +744,7 @@ static void blit_framebuffer_surface( struct framebuffer_surface *surface )
     const struct opengl_funcs *funcs = &display_funcs;
     struct client_surface *client;
     RECT src, dst;
+    BOOL fit_window = FALSE;
 
     typedef void (*state_handler_t)(int mode, struct wgl_context *ctx, struct fs_hack_gl_state *state);
     static const state_handler_t general_state_handlers[] =
@@ -766,6 +773,17 @@ static void blit_framebuffer_surface( struct framebuffer_surface *surface )
     if (!NtUserGetClientRect( client->hwnd, &src, NtUserGetDpiForWindow( client->hwnd ) )) return;
     if (!NtUserGetClientRect( client->hwnd, &dst, NtUserGetWinMonitorDpi( client->hwnd, MDT_WINE_RAW_DPI ) )) return;
 
+#ifdef __SWITCH__
+    if (wine_nx_window_fit)
+    {
+        struct wine_nx_aspect_rect shown;
+        POINT origin = {0};
+        NtUserMapWindowPoints( client->hwnd, 0, &origin, 1, NtUserGetDpiForWindow( client->hwnd ) );
+        if ((fit_window = wine_nx_window_fit_update( src.right, src.bottom, origin.x, origin.y, &shown )))
+            SetRect( &dst, shown.x, 720 - shown.y - shown.height,
+                     shown.x + shown.width, 720 - shown.y );
+    }
+#endif
     TRACE( "hwnd %p src %s dst %s fbo %u\n", client->hwnd, wine_dbgstr_rect(&src), wine_dbgstr_rect(&dst), surface->base.read_fbo );
 
     if (!ctx->gamma_program || !ctx->gamma_ramp)
@@ -789,11 +807,23 @@ static void blit_framebuffer_surface( struct framebuffer_surface *surface )
     /* the target default framebuffer should be swapped after. We are always presenting framebuffer's surface
      * front while the color attachment textures are swapped on framebuffer surface swap before blit. */
     funcs->p_glDrawBuffer( GL_BACK );
+    if (fit_window)
+    {
+        GLfloat clear[4];
+        GLboolean mask[4];
+        funcs->p_glGetFloatv( GL_COLOR_CLEAR_VALUE, clear );
+        funcs->p_glGetBooleani_v( GL_COLOR_WRITEMASK, 0, mask );
+        funcs->p_glColorMaski( 0, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
+        funcs->p_glClearColor( 0, 0, 0, 1 );
+        funcs->p_glClear( GL_COLOR_BUFFER_BIT );
+        funcs->p_glClearColor( clear[0], clear[1], clear[2], clear[3] );
+        funcs->p_glColorMaski( 0, mask[0], mask[1], mask[2], mask[3] );
+    }
     if (surface->base.read_fbo == surface->base.draw_fbo && !needs_gamma)
     {
         funcs->p_glBindFramebuffer( GL_READ_FRAMEBUFFER, surface->base.read_fbo );
         funcs->p_glReadBuffer( GL_COLOR_ATTACHMENT0 );
-        funcs->p_glBlitFramebuffer( 0, 0, src.right, src.bottom, 0, 0, dst.right, dst.bottom, GL_COLOR_BUFFER_BIT,
+        funcs->p_glBlitFramebuffer( 0, 0, src.right, src.bottom, dst.left, dst.top, dst.right, dst.bottom, GL_COLOR_BUFFER_BIT,
                                     ctx->integer_scaling ? GL_NEAREST : GL_LINEAR );
     }
     else
@@ -807,8 +837,9 @@ static void blit_framebuffer_surface( struct framebuffer_surface *surface )
                                                              GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &front_texture );
         funcs->p_glBindTexture( GL_TEXTURE_2D, front_texture );
 
-        if (ctx->has_GL_ARB_viewport_array) funcs->p_glViewportIndexedf( 0, 0, 0, dst.right, dst.bottom );
-        else funcs->p_glViewport( 0, 0, dst.right, dst.bottom );
+        if (ctx->has_GL_ARB_viewport_array)
+            funcs->p_glViewportIndexedf( 0, dst.left, dst.top, dst.right - dst.left, dst.bottom - dst.top );
+        else funcs->p_glViewport( dst.left, dst.top, dst.right - dst.left, dst.bottom - dst.top );
 
         if (gamma_serial != surface->last_gamma_serial)
         {
@@ -933,6 +964,11 @@ static BOOL needs_framebuffer_surface( HWND hwnd )
     float gamma_ramp[GAMMA_RAMP_SIZE * 4];
     LONG gamma_serial;
 
+#ifdef __SWITCH__
+    /* Capture the game's real window framebuffer before fitting it to EGL's
+     * full-screen surface. Never rescale pixels from the previous screen. */
+    if (wine_nx_window_fit) return TRUE;
+#endif
     if (!fshack_enabled) return FALSE;
 
     if (user_driver->pHasWindowManager( "xwayland_glx_nvidia" ))

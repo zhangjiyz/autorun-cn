@@ -117,7 +117,7 @@ files sit next to its executable, named after it:
 
 | File | Content |
 |---|---|
-| `NAME.wine-nx.txt` | Title, hidden from the library, verbose traces, profiler, `windows` (compositor or framebuffer), `d3d=dxvk`, address space, own controls |
+| `NAME.wine-nx.txt` | Title, hidden from the library, verbose traces, profiler, `windows` (compositor or framebuffer), `d3d=dxvk`, address space, own controls, `controller=keyboard`, `window-fit=1` (fit the actual OpenGL client framebuffer), `sdl-audio=directsound`, `sd-stat-cache=1` (metadata cache for immutable read-only SD files) |
 | `NAME.args.txt` | Its command-line arguments |
 | `NAME.keys.txt` | Its own controls, over `config/keys.txt` |
 | `NAME.box64.txt` | Box64 code generation options, one `BOX64_DYNAREC_*=value` per line |
