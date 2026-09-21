@@ -117,10 +117,23 @@ files sit next to its executable, named after it:
 
 | File | Content |
 |---|---|
-| `NAME.wine-nx.txt` | Title, hidden from the library, verbose traces, profiler, `windows` (compositor or framebuffer), `d3d=dxvk`, address space, own controls, `controller=keyboard`, `window-fit=1` (fit the actual OpenGL client framebuffer), `sdl-audio=directsound`, `sd-stat-cache=1` (metadata cache for immutable read-only SD files) |
+| `NAME.wine-nx.txt` | Title, hidden from the library, verbose traces, profiler, `windows` (compositor or framebuffer), `d3d=dxvk`, address space, own controls, `controller=keyboard`, `window-fit=1` (fit the actual OpenGL client framebuffer), `sdl-audio=directsound`, `sd-stat-cache=1` (per-handle SD metadata cache), `sd-clean-writer-cache=1` (cache bytes read through still-clean read/write handles) |
 | `NAME.args.txt` | Its command-line arguments |
 | `NAME.keys.txt` | Its own controls, over `config/keys.txt` |
 | `NAME.box64.txt` | Box64 code generation options, one `BOX64_DYNAREC_*=value` per line |
+
+With `sd-clean-writer-cache=1`, the SD byte cache also accepts a file opened
+read/write while the handle is still clean. Some older games request write
+access for databases they only inspect. The first actual write or truncate
+invalidates every cached handle for that path before the file changes; rename
+and unlink invalidate the path too. Without the option, writable handles keep
+the previous uncached behavior.
+
+`wined3d-explicit-buffer-flush=0` disables WineD3D's explicit flushes for
+noncoherent persistently mapped OpenGL buffers for one program. The default is
+`1`. `wined3d-csmt=0` disables WineD3D's multithreaded command stream for one
+program; its default is also `1`. These are narrow compatibility controls and
+must remain opt-in per game.
 
 `d3d=dxvk` selects `C:\dxvk` for x86 programs and `C:\dxvk64` for AMD64
 programs. Application-local graphics DLLs have priority. Existing

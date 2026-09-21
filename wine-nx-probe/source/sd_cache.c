@@ -21,7 +21,8 @@
 #include "sd_read_cache.h"
 
 /* Reported by the runtime's [PROGRESS] line. */
-int wine_nx_sd_stat_cache;             /* per-game opt-in, immutable read-only files */
+int wine_nx_sd_stat_cache;             /* per-game opt-in, invalidated before writes */
+int wine_nx_sd_clean_writer_cache;     /* per-game opt-in for clean O_RDWR data */
 unsigned int wine_nx_sd_stat_queries, wine_nx_sd_stat_hits;
 unsigned int wine_nx_sd_reads;         /* read requests sent to the FS service */
 unsigned int wine_nx_sd_hits;          /* reads the cache served without one */
@@ -66,13 +67,20 @@ static int sd_cache_open( struct _reent *r, void *fd, const char *path, int flag
 
     if (sd_cache_base->open_r( r, fd, path, flags, mode ) == -1) return -1;
     pthread_mutex_lock( &sd_cache_mutex );
-    if (!sd_cache_opened( &sd_cache_files, &sd_cache_pool, fd, path, writable ) && writable)
+    if (!sd_cache_opened( &sd_cache_files, &sd_cache_pool, fd, path, writable,
+                          wine_nx_sd_clean_writer_cache ) && writable)
     {
         /* Without a record of this writer, its readers cannot be told apart. */
         struct sd_cache_file *file;
 
         sd_cache_off = 1;
         for (file = sd_cache_files; file; file = file->next) sd_cache_drop( file, &sd_cache_pool );
+    }
+    else if (flags & O_TRUNC)
+    {
+        /* The successful open already changed the file before the wrapper
+         * could record its handle. Treat it like a write. */
+        sd_cache_modified( sd_cache_files, &sd_cache_pool, fd );
     }
     pthread_mutex_unlock( &sd_cache_mutex );
     return 0;
@@ -84,6 +92,14 @@ static int sd_cache_close( struct _reent *r, void *fd )
     sd_cache_closed( &sd_cache_files, &sd_cache_pool, fd );
     pthread_mutex_unlock( &sd_cache_mutex );
     return sd_cache_base->close_r( r, fd );
+}
+
+static ssize_t sd_cache_write_file( struct _reent *r, void *fd, const char *ptr, size_t len )
+{
+    pthread_mutex_lock( &sd_cache_mutex );
+    sd_cache_modified( sd_cache_files, &sd_cache_pool, fd );
+    pthread_mutex_unlock( &sd_cache_mutex );
+    return sd_cache_base->write_r( r, fd, ptr, len );
 }
 
 /* A read that stops short of what was asked for, before the end of the file,
@@ -143,7 +159,6 @@ static ssize_t sd_cache_read_file( struct _reent *r, void *fd, char *ptr, size_t
         sd_cache_base->seek_r( r, fd, got >= 0 ? pos + got : pos, SEEK_SET );
     }
     pthread_mutex_unlock( &sd_cache_mutex );
-
     if (got >= 0)
     {
         memcpy( ptr, copy, (size_t)got );
@@ -209,10 +224,8 @@ static int sd_cache_unlink( struct _reent *r, const char *name )
 
 static int sd_cache_ftruncate( struct _reent *r, void *fd, off_t len )
 {
-    struct sd_cache_file *file;
-
     pthread_mutex_lock( &sd_cache_mutex );
-    if ((file = sd_cache_find( sd_cache_files, fd ))) sd_cache_forget_path( sd_cache_files, &sd_cache_pool, file->path );
+    sd_cache_modified( sd_cache_files, &sd_cache_pool, fd );
     pthread_mutex_unlock( &sd_cache_mutex );
     return sd_cache_base->ftruncate_r( r, fd, len );
 }
@@ -229,6 +242,7 @@ int wine_nx_sd_cache_install(void)
     sd_cache_device.open_r = sd_cache_open;
     sd_cache_device.close_r = sd_cache_close;
     sd_cache_device.read_r = sd_cache_read_file;
+    if (sd_cache_base->write_r) sd_cache_device.write_r = sd_cache_write_file;
     if (sd_cache_base->fstat_r) sd_cache_device.fstat_r = sd_cache_fstat;
     if (sd_cache_base->rename_r) sd_cache_device.rename_r = sd_cache_rename;
     if (sd_cache_base->unlink_r) sd_cache_device.unlink_r = sd_cache_unlink;

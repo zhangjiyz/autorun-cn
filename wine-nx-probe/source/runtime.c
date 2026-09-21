@@ -421,6 +421,8 @@ static int runtime_dxvk;
 static int runtime_dxvk_hud;
 static int runtime_wined3d_gdi;
 static int runtime_wined3d_frontbuffer_swap;
+static int runtime_wined3d_explicit_buffer_flush = 1;
+static int runtime_wined3d_csmt = 1;
 static char runtime_vkd3d_version[32];
 static char runtime_dxvk_version[32];
 static char runtime_locale[48];
@@ -806,6 +808,7 @@ unsigned int wine_nx_pad_key_state;
 extern u64 wine_nx_xinput_last_poll;
 extern int wine_nx_force_keyboard;
 extern int wine_nx_sd_stat_cache;
+extern int wine_nx_sd_clean_writer_cache;
 
 /* How long + and - must be held together before the program is closed. */
 #define WINE_NX_QUIT_CHORD_NS 1000000000ull
@@ -1787,7 +1790,10 @@ static RTL_USER_PROCESS_PARAMETERS *runtime_create_process_params( const char *t
     int dxvk_path = launcher_dxvk_version_directory( main_image_info.Machine, runtime_dxvk_version,
                                                      dxvk_dir, sizeof(dxvk_dir) );
 
-    snprintf( wined3d_config, sizeof(wined3d_config), "cs_spin_count=64,explicit_buffer_flush=1%s%s",
+    snprintf( wined3d_config, sizeof(wined3d_config),
+              "cs_spin_count=64,explicit_buffer_flush=%d%s%s%s",
+              runtime_wined3d_explicit_buffer_flush,
+              runtime_wined3d_csmt ? "" : ",csmt=0",
               runtime_wined3d_gdi ? ",renderer=gdi" : "",
               runtime_wined3d_frontbuffer_swap ? ",nx_frontbuffer_swap=1" : "" );
 
@@ -1840,6 +1846,7 @@ static RTL_USER_PROCESS_PARAMETERS *runtime_create_process_params( const char *t
 
         pthread_mutex_lock( &wine_nx_pointer_mutex );
         wine_nx_sd_stat_cache = 0;
+        wine_nx_sd_clean_writer_cache = 0;
         wine_nx_window_fit = 0;
         wine_nx_left_stick_shift_run = 0;
         wine_nx_left_stick_eight_way = 0;
@@ -1853,7 +1860,10 @@ static RTL_USER_PROCESS_PARAMETERS *runtime_create_process_params( const char *t
         {
             launcher_settings_read( &kv, &settings );
             wine_nx_sd_stat_cache = launcher_kv_get_int( &kv, "sd-stat-cache", 0 ) == 1;
-            if (wine_nx_sd_stat_cache) log_line( "[SDCACHE] read-only file metadata cache enabled" );
+            if (wine_nx_sd_stat_cache) log_line( "[SDCACHE] file metadata cache enabled" );
+            wine_nx_sd_clean_writer_cache = launcher_kv_get_int( &kv, "sd-clean-writer-cache", 0 ) == 1;
+            if (wine_nx_sd_clean_writer_cache)
+                log_line( "[SDCACHE] clean read/write file byte cache enabled" );
             wine_nx_window_fit = launcher_kv_get_int( &kv, "window-fit", 0 ) == 1;
             {
                 char audio[32] = "";
@@ -3452,7 +3462,7 @@ static unsigned int launcher_install_forwarder( int bits, const char *name, unsi
         .nro_path = own_nro,
         .args = NULL,
         .name = name,
-        .author = "ticoverse.com",
+        .author = "cn by zhangjiyz",
         .address_space = bits == 32 ? WINE_NX_SPACE_32BIT_NO_ALIAS : WINE_NX_SPACE_39BIT,
         .icon = bits == 32 ? wine_nx_icon_32bit : wine_nx_icon_any,
         .icon_size = bits == 32 ? wine_nx_icon_32bit_size : wine_nx_icon_any_size,
@@ -3830,6 +3840,8 @@ int main( int argc, char **argv )
         runtime_locale[0] = 0;
         runtime_wined3d_gdi = 0;
         runtime_wined3d_frontbuffer_swap = 0;
+        runtime_wined3d_explicit_buffer_flush = 1;
+        runtime_wined3d_csmt = 1;
         if (target[1] != ':' &&
             launcher_program_settings_path( RUNTIME_DIR, target, settings_path, sizeof(settings_path) ) &&
             launcher_kv_load( &kv, settings_path ) && kv.size)
@@ -3862,6 +3874,22 @@ int main( int argc, char **argv )
                     else if (strcmp( frontbuffer_swap, "0" ))
                         log_line( "[WINED3D] invalid wined3d-frontbuffer-swap '%s'; disabled",
                                   frontbuffer_swap );
+                }
+            }
+            {
+                char value[8];
+
+                if (launcher_kv_get( &kv, "wined3d-explicit-buffer-flush", value, sizeof(value) ))
+                {
+                    if (!strcmp( value, "0" )) runtime_wined3d_explicit_buffer_flush = 0;
+                    else if (strcmp( value, "1" ))
+                        log_line( "[WINED3D] invalid wined3d-explicit-buffer-flush '%s'; enabled", value );
+                }
+                if (launcher_kv_get( &kv, "wined3d-csmt", value, sizeof(value) ))
+                {
+                    if (!strcmp( value, "0" )) runtime_wined3d_csmt = 0;
+                    else if (strcmp( value, "1" ))
+                        log_line( "[WINED3D] invalid wined3d-csmt '%s'; enabled", value );
                 }
             }
 #ifdef WINE_NX_MESA_SWITCH
@@ -3903,6 +3931,10 @@ int main( int argc, char **argv )
             if (runtime_wined3d_gdi) log_line( "[WINED3D] profile renderer=gdi (2D/no3d swapchain)" );
             if (runtime_wined3d_frontbuffer_swap)
                 log_line( "[WINED3D] profile presents DirectDraw front-buffer updates through GL swaps" );
+            if (!runtime_wined3d_explicit_buffer_flush)
+                log_line( "[WINED3D] profile disables explicit mapped-buffer flushes" );
+            if (!runtime_wined3d_csmt)
+                log_line( "[WINED3D] profile disables the multithreaded command stream" );
         }
     }
 

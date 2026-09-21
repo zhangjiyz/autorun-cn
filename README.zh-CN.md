@@ -111,7 +111,7 @@ Autorun 是一款在 Switch 上运行 Windows 游戏和程序的自制软件。�
 
 如果游戏以 800×600 运行、画面靠左，适配包中的 `aspect-fit=800x600` 会将 WineD3D 已放大的 960×720 画面居中；`touch-coordinates=screen` 配合自动应用的 EXE 鼠标补丁，让触屏按 Switch 屏幕位置定位。其他图形路径仍需逐一验证。
 
-《新仙剑奇侠传》NewPAL 2.17.102.0 的实机验证配置见 [NewPAL 配置说明](wine-nx-probe/profiles/newpal/README.zh-CN.md)，包含独立键盘映射和 `controller=keyboard` 强制键盘模式。造成重叠嫌疑的居中设置已撤回。
+《新仙剑奇侠传》NewPAL 2.17.102.0 的实机验证配置见 [NewPAL 配置说明](wine-nx-probe/profiles/newpal-steam/README.zh-CN.md)，包含独立键盘映射和 `controller=keyboard` 强制键盘模式。造成重叠嫌疑的居中设置已撤回。
 
 **同时按住 + 和 − 一秒钟**可关闭游戏。
 

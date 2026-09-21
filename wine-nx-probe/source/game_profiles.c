@@ -225,7 +225,7 @@ static int parse_binary_patch( const char *text, struct game_profile_patch *patc
 static int allowed_key( const char *key, int controls )
 {
     static const char settings[] =
-        "|title|d3d|d3d9|own-controls|controller|verbose|profile|window-fit|sdl-audio|sd-stat-cache|locale|wined3d-renderer|wined3d-frontbuffer-swap|"
+        "|title|d3d|d3d9|own-controls|controller|verbose|profile|window-fit|sdl-audio|sd-stat-cache|sd-clean-writer-cache|locale|wined3d-renderer|wined3d-frontbuffer-swap|wined3d-explicit-buffer-flush|wined3d-csmt|"
         "aspect-fit|touch-coordinates|left-stick-run|left-stick-eight-way|left-stick-aim|left-stick-move|"
         "windows|dxvk-version|vkd3d-version|dxvk-hud|frame-limit|vsync|";
     static const char keys[] =

@@ -39,10 +39,14 @@ int main( int argc, char **argv )
     assert( argc >= 2 );
     struct game_profile_catalog *catalog = calloc( 1, sizeof(*catalog) );
     assert( game_profiles_load( argv[1], catalog ) == GAME_PROFILE_OK );
-    assert( catalog->count == 3 );
+    assert( catalog->count == 5 );
     assert( game_profile_matches( &catalog->entries[0], "新仙剑" ) );
     assert( game_profile_matches( &catalog->entries[0], "NEWpal" ) );
     assert( !game_profile_matches( &catalog->entries[0], "not-this-game" ) );
+    assert( game_profile_matches( &catalog->entries[2], "仙剑2" ) );
+    assert( game_profile_matches( &catalog->entries[2], "Pal2" ) );
+    assert( game_profile_matches( &catalog->entries[3], "仙剑3" ) );
+    assert( game_profile_matches( &catalog->entries[3], "PAL3" ) );
     for (int i = 2; i < argc; i++)
     {
         if (game_profiles_load( argv[i], catalog ) == GAME_PROFILE_OK)
@@ -50,6 +54,8 @@ int main( int argc, char **argv )
     }
     assert( game_profiles_load( argv[1], catalog ) == GAME_PROFILE_OK );
     struct game_profile profile = catalog->entries[0];
+    char packaged_title[256];
+    assert( launcher_kv_get( &profile.settings, "title", packaged_title, sizeof(packaged_title) ) );
     profile.version = 1;
     const unsigned int initial_version = profile.version;
     char folder[] = "/tmp/autorun-profile-core-XXXXXX", settings[768], keys[768];
@@ -87,7 +93,7 @@ int main( int argc, char **argv )
     assert( durable_write( keys, "A=0x20\n", 7 ) );
     int preserved;
     assert( game_profile_apply( settings, keys, &profile, "owner/repo", "", &preserved ) == GAME_PROFILE_OK );
-    expect( settings, "title", "新仙剑奇侠传" ); expect( settings, "controller", "keyboard" ); expect( keys, "A", "0x0d" );
+    expect( settings, "title", packaged_title ); expect( settings, "controller", "keyboard" ); expect( keys, "A", "0x0d" );
     binding_version( settings, initial_version );
     struct launcher_kv kv;
     assert( launcher_kv_load( &kv, settings ) ); set( &kv, "title", "My custom name" ); assert( durable_write( settings, kv.text, kv.size ) );

@@ -1049,7 +1049,7 @@ if(NACPTOOL AND ELF2NRO)
     set(AUTORUN_CN_REVISION "1")
     add_custom_command(
         OUTPUT "${RUNTIME_NACP_FILE}"
-        COMMAND "${NACPTOOL}" --create "Autorun" "ticoverse.com"
+        COMMAND "${NACPTOOL}" --create "Autorun" "cn by zhangjiyz"
                 "${AUTORUN_UPSTREAM_VERSION}.${AUTORUN_CN_REVISION}" "${RUNTIME_NACP_FILE}"
         DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt"
         VERBATIM

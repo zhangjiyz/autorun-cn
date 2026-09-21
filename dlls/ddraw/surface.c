@@ -150,10 +150,6 @@ HRESULT ddraw_surface_update_frontbuffer(struct ddraw_surface *surface,
 
     if (!read && ddraw_nx_frontbuffer_swap_enabled() && ddraw->wined3d_swapchain)
     {
-        static LONG updates;
-        LONG update = InterlockedIncrement(&updates);
-        BOOL report = update <= 12 || !(update % 60);
-
         /* Some DirectDraw games stop flipping after video playback and update
          * the primary surface through the GDI screen-DC fallback below.  That
          * works with desktop WGL's visible front buffer, but Wine-NX presents
@@ -170,10 +166,6 @@ HRESULT ddraw_surface_update_frontbuffer(struct ddraw_surface *surface,
                     swap_interval ? swap_interval : 1, 0);
             ddraw->flags |= DDRAW_SWAPPED;
         }
-        if (report)
-            ERR("[NXDDRAW] update %ld surface %p caps %#lx rect %ld,%ld-%ld,%ld interval %u src %p dst %p result %#lx.\n",
-                    update, surface, surface->surface_desc.ddsCaps.dwCaps, rect->left, rect->top,
-                    rect->right, rect->bottom, swap_interval, src_texture, dst_texture, hr);
         return hr;
     }
 
@@ -1732,7 +1724,14 @@ static HRESULT ddraw_surface_blt_clipped(struct ddraw_surface *dst_surface, cons
         SetRectEmpty(&src_rect);
     }
 
-    if (!dst_surface->clipper)
+    /* Wine-NX hands the screen to the OpenGL swapchain while a DirectDraw
+     * game is active.  An HWND clipper based on GetRandomRgn(SYSRGN) can then
+     * report an empty visible region, causing primary-surface blits to return
+     * DD_OK without copying or presenting anything.  The per-game explicit
+     * present option already owns the complete primary surface, so use its
+     * full destination rectangle instead of the desktop visibility clipper. */
+    if (!dst_surface->clipper || (ddraw_nx_frontbuffer_swap_enabled()
+            && (dst_surface->surface_desc.ddsCaps.dwCaps & DDSCAPS_PRIMARYSURFACE)))
     {
         if (src_surface && src_surface->surface_desc.ddsCaps.dwCaps & DDSCAPS_PRIMARYSURFACE)
             hr = ddraw_surface_update_frontbuffer(src_surface, &src_rect, TRUE, 0);

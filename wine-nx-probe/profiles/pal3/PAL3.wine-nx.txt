@@ -1,9 +1,11 @@
-title=新仙剑奇侠传（2001）
+title=仙剑奇侠传三
 d3d=wine
-wined3d-frontbuffer-swap=1
+wined3d-explicit-buffer-flush=0
 own-controls=1
 controller=keyboard
 verbose=0
 windows=compositor
 window-fit=1
+sd-stat-cache=1
+sd-clean-writer-cache=1
 locale=zh_CN.UTF-8

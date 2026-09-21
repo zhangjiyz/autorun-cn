@@ -85,15 +85,15 @@ int main( int argc, char **argv )
     assert( argc == 5 );
     unsigned base_version;
     assert( sscanf( argv[4], "%u", &base_version ) == 1 && base_version > 0 );
-    snprintf( updated_package, sizeof(updated_package), "profile-newpal-v%u.zip", base_version + 1 );
+    snprintf( updated_package, sizeof(updated_package), "profile-newpal-steam-v%u.zip", base_version + 1 );
     char root[768]; snprintf( root, sizeof(root), "%s/network", argv[1] ); assert( !mkdir( root, 0700 ) );
     snprintf( index_path, sizeof(index_path), "%s/autorun-profiles.tsv", argv[3] );
     snprintf( package_path, sizeof(package_path), "%s/%s", argv[3], updated_package );
     /* Index validation is separate from ZIP validation. */
     size_t length; char *valid = contents( index_path, &length );
     struct game_profile_catalog *index = calloc( 1, sizeof(*index) );
-    assert( game_profile_index_parse( valid, index ) && index->count == 3 );
-    assert( !strcmp( index->entries[0].id, "newpal" ) && index->entries[0].version == base_version + 1 );
+    assert( game_profile_index_parse( valid, index ) && index->count == 5 );
+    assert( !strcmp( index->entries[0].id, "newpal-steam" ) && index->entries[0].version == base_version + 1 );
     char *bad = malloc( length * 2 + 1 ); assert( bad );
     strcpy( bad, valid ); strstr( bad, "https://" )[4] = 'x'; assert( !game_profile_index_parse( bad, index ) );
     strcpy( bad, valid ); bad[length - 1] = 0; assert( !game_profile_index_parse( bad, index ) );

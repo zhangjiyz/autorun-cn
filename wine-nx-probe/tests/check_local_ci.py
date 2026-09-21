@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Exercise the release verifier's failure boundaries without compiling a Switch runtime."""
+import ast
+import bisect
 import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import re
 import shutil
 import struct
 import subprocess
@@ -18,6 +21,18 @@ spec.loader.exec_module(ci)
 spec = importlib.util.spec_from_file_location('package_profiles', ci.PROBE / 'tools/package-profiles.py')
 packager = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(packager)
+
+translation_source = (ci.PROBE / 'source/launcher_zh_cn.h').read_text()
+translation_pattern = re.compile(
+    r'^\s*\{\s*("(?:\\.|[^"\\])*")\s*,\s*("(?:\\.|[^"\\])*")\s*\},\s*$', re.MULTILINE)
+translations = [(ast.literal_eval(english), ast.literal_eval(chinese))
+                for english, chinese in translation_pattern.findall(translation_source)]
+translation_keys = [english for english, _ in translations]
+assert translation_keys == sorted(set(translation_keys)), 'launcher translation keys must be unique and strcmp-sorted'
+update_index = bisect.bisect_left(translation_keys, 'Check for update')
+assert translations[update_index] == ('Check for update', '检查更新')
+
+print('PASS: launcher translations are unique, strcmp-sorted and include the update action')
 
 assert '标签 profile-test-001' in ci.runtime_update_note('Debug', 'profile-test-001')
 assert '可使用预发布' in ci.runtime_update_note('Debug', 'profile-test-001')

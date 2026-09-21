@@ -9,9 +9,9 @@
  * keeps a few aligned chunks: a read inside one is a copy, a miss reads the
  * whole chunk in one request, and the least recently used chunk is replaced.
  *
- * Only files opened read-only are cached. Opening a path for writing stops
- * caching of every open file with that path, and a file opened while a writer
- * has its path open is not cached. The caller locks around these functions.
+ * Read-only and still-clean read/write handles may cache bytes and metadata.
+ * The write wrapper invalidates every matching handle before the first real
+ * write. The caller locks around these functions.
  */
 #ifndef WINE_NX_SD_READ_CACHE_H
 #define WINE_NX_SD_READ_CACHE_H
@@ -44,7 +44,9 @@ struct sd_cache_file
     void *key;         /* libnx's per-open file data */
     char *path;
     int writable;
+    int dirty;
     int cacheable;
+    int stat_cacheable;
     int stat_valid;
     struct stat stat_value;
     struct sd_cache_line lines[SD_CACHE_LINES];
@@ -75,14 +77,14 @@ static inline int sd_cache_read_stat( struct sd_cache_file *file, struct stat *s
                                       sd_cache_stat_fn query, void *ctx, unsigned int *queries )
 {
     int ret;
-    if (file && file->cacheable && file->stat_valid)
+    if (file && file->stat_cacheable && file->stat_valid)
     {
         *st = file->stat_value;
         return 0;
     }
     (*queries)++;
     ret = query( ctx, st );
-    if (!ret && file && file->cacheable)
+    if (!ret && file && file->stat_cacheable)
     {
         file->stat_value = *st;
         file->stat_valid = 1;
@@ -227,13 +229,15 @@ static inline void sd_cache_forget_path( struct sd_cache_file *list, struct sd_c
     {
         if (!sd_cache_same_path( list->path, path )) continue;
         list->cacheable = 0;
+        list->stat_cacheable = 0;
         sd_cache_drop( list, pool );
     }
 }
 
 /* Record an open file. Returns NULL without memory. */
 static inline struct sd_cache_file *sd_cache_opened( struct sd_cache_file **list, struct sd_cache_pool *pool,
-                                                     void *key, const char *path, int writable )
+                                                     void *key, const char *path, int writable,
+                                                     int clean_writer_cache )
 {
     struct sd_cache_file *file, *other;
 
@@ -245,12 +249,18 @@ static inline struct sd_cache_file *sd_cache_opened( struct sd_cache_file **list
     }
     file->key = key;
     file->writable = writable;
-    file->cacheable = !writable;
+    file->cacheable = !writable || clean_writer_cache;
+    file->stat_cacheable = 1;
     for (other = *list; other; other = other->next)
     {
         if (!sd_cache_same_path( other->path, path )) continue;
-        if (other->writable) file->cacheable = 0;
-        if (writable)
+        if (other->writable && !clean_writer_cache) file->cacheable = 0;
+        if (other->dirty)
+        {
+            file->cacheable = 0;
+            file->stat_cacheable = 0;
+        }
+        if (writable && !clean_writer_cache)
         {
             other->cacheable = 0;
             sd_cache_drop( other, pool );
@@ -259,6 +269,19 @@ static inline struct sd_cache_file *sd_cache_opened( struct sd_cache_file **list
     file->next = *list;
     *list = file;
     return file;
+}
+
+/* Invalidate data and metadata before changing an open file.  Writable handles
+ * may cache until their first real write; many old games request read/write
+ * access for files that they only inspect. A dirty writer keeps later opens
+ * from caching until that writer closes. */
+static inline void sd_cache_modified( struct sd_cache_file *list, struct sd_cache_pool *pool, void *key )
+{
+    struct sd_cache_file *file = sd_cache_find( list, key );
+
+    if (!file) return;
+    file->dirty = 1;
+    sd_cache_forget_path( list, pool, file->path );
 }
 
 static inline void sd_cache_closed( struct sd_cache_file **list, struct sd_cache_pool *pool, void *key )

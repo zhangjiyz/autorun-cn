@@ -44,15 +44,15 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
                 archive.writestr(path, data)
         bad.append(output)
 
-    invalid('path-traversal', [(name if name != 'newpal/keys.txt' else '../Game.keys.txt', data) for name, data in entries.items()])
-    invalid('unknown-setting', [(name, b'run-command=evil\n' if name == 'newpal/settings.txt' else data) for name, data in entries.items()])
-    invalid('duplicate-setting', [(name, data + b'controller=keyboard\n' if name == 'newpal/settings.txt' else data) for name, data in entries.items()])
-    invalid('oversized', [(name, b'#' * 8192 if name == 'newpal/keys.txt' else data) for name, data in entries.items()])
-    invalid('missing-file', [(name, data) for name, data in entries.items() if name != 'newpal/keys.txt'])
+    invalid('path-traversal', [(name if name != 'newpal-steam/keys.txt' else '../Game.keys.txt', data) for name, data in entries.items()])
+    invalid('unknown-setting', [(name, b'run-command=evil\n' if name == 'newpal-steam/settings.txt' else data) for name, data in entries.items()])
+    invalid('duplicate-setting', [(name, data + b'controller=keyboard\n' if name == 'newpal-steam/settings.txt' else data) for name, data in entries.items()])
+    invalid('oversized', [(name, b'#' * 8192 if name == 'newpal-steam/keys.txt' else data) for name, data in entries.items()])
+    invalid('missing-file', [(name, data) for name, data in entries.items() if name != 'newpal-steam/keys.txt'])
     invalid('embedded-nul', [(name, data + b'\0' if name == 'catalog.tsv' else data) for name, data in entries.items()])
-    invalid('duplicate-id', [(name, data.replace(b'zhaoyun-2002ls\t', b'newpal\t') if name == 'catalog.tsv' else data) for name, data in entries.items()])
-    link = ZipInfo('newpal/keys.txt'); link.create_system = 3; link.external_attr = 0o120777 << 16
-    invalid('symlink', [(link if name == 'newpal/keys.txt' else name, data) for name, data in entries.items()])
+    invalid('duplicate-id', [(name, data.replace(b'zhaoyunzhuan\t', b'newpal-steam\t') if name == 'catalog.tsv' else data) for name, data in entries.items()])
+    link = ZipInfo('newpal-steam/keys.txt'); link.create_system = 3; link.external_attr = 0o120777 << 16
+    invalid('symlink', [(link if name == 'newpal-steam/keys.txt' else name, data) for name, data in entries.items()])
     # Test mapping maintenance errors before any artifact is emitted.
     maintenance = root / 'maintenance'
     shutil.copytree(PROBE / 'profiles', maintenance)
@@ -104,10 +104,10 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
     with ZipFile(root / 'framework.zip') as archive:
         extended = {name: archive.read(name) for name in archive.namelist()}
     bad.clear()
-    invalid('bad-png', [(name, data[:-5] if name == 'newpal/cover.png' else data) for name, data in extended.items()])
-    invalid('huge-png', [(name, b'x' * (2 * 1024 * 1024 + 1) if name == 'newpal/cover.png' else data) for name, data in extended.items()])
-    invalid('cheat-step-zero', [(name, data.replace(b'\t0\t100\t5\t10\t', b'\t0\t100\t0\t10\t') if name == 'newpal/cheats.txt' else data) for name, data in extended.items()])
-    invalid('duplicate-cheat', [(name, data + data.splitlines(keepends=True)[1] if name == 'newpal/cheats.txt' else data) for name, data in extended.items()])
+    invalid('bad-png', [(name, data[:-5] if name == 'newpal-steam/cover.png' else data) for name, data in extended.items()])
+    invalid('huge-png', [(name, b'x' * (2 * 1024 * 1024 + 1) if name == 'newpal-steam/cover.png' else data) for name, data in extended.items()])
+    invalid('cheat-step-zero', [(name, data.replace(b'\t0\t100\t5\t10\t', b'\t0\t100\t0\t10\t') if name == 'newpal-steam/cheats.txt' else data) for name, data in extended.items()])
+    invalid('duplicate-cheat', [(name, data + data.splitlines(keepends=True)[1] if name == 'newpal-steam/cheats.txt' else data) for name, data in extended.items()])
     invalid('extra-cover', list(extended.items()) + [('extra/cover.png', png)])
     run(core, root / 'framework.zip', *bad)
     framework = root / 'framework'
@@ -160,8 +160,8 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
     runtime = root / 'runtime'; (runtime / 'profiles').mkdir(parents=True)
     pack.build_release(PROBE / 'profiles/catalog.json', runtime / 'profiles')
     versions = {profile['id']: profile['version'] for profile in data['profiles']}
-    base_version = versions['newpal']
-    other_version = versions['zhaoyun-2002ls']
+    base_version = versions['newpal-steam']
+    other_version = versions['zhaoyunzhuan']
     # Start with no source file to test the new default management UI.
     updated = root / 'updated'
     newer = json.loads(json.dumps(data)); newer['profiles'][0]['version'] += 1
@@ -191,5 +191,5 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
         PROBE / 'source/launcher_profiles.c', PROBE / 'source/game_profiles.c', PROBE / 'source/game_cheats.c', PROBE / 'source/autorun_update.c',
         '-Wl,--wrap=autorun_update_text', '-Wl,--wrap=autorun_update_file',
         *flags('sdl2', 'SDL2_ttf', 'minizip', 'libcurl', 'openssl', 'libpng'), '-lz', '-o', network)
-    run(network, runtime, runtime / f'profiles/profile-newpal-v{base_version}.zip', updated, base_version)
+    run(network, runtime, runtime / f'profiles/profile-newpal-steam-v{base_version}.zip', updated, base_version)
     print('Profile package, cover, cheats, recovery, CNB metadata and menu regression suite passed.')

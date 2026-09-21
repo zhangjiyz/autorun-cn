@@ -63,9 +63,9 @@ enum ui_action ui_list_run( struct ui *ui, struct ui_list *list, const char *tit
     switch (menu_step++)
     {
     case 0: assert( rows[1].disabled && !binding.id[0] ); list->selection = 0; return UI_ACTION_CHOOSE;
-    case 1: assert( !rows[1].disabled && !strcmp( binding.id, "newpal" ) ); list->selection = 1; return UI_ACTION_CHOOSE;
+    case 1: assert( !rows[1].disabled && !strcmp( binding.id, "newpal-steam" ) ); list->selection = 1; return UI_ACTION_CHOOSE;
     case 2: assert( !rows[2].disabled ); list->selection = 2; return UI_ACTION_CHOOSE;
-    case 3: assert( !rows[1].disabled && !strcmp( binding.id, "newpal" ) ); return UI_ACTION_BACK;
+    case 3: assert( !rows[1].disabled && !strcmp( binding.id, "newpal-steam" ) ); return UI_ACTION_BACK;
     default: assert( 0 );
     }
     return UI_ACTION_BACK;
@@ -128,7 +128,7 @@ int main( int argc, char **argv )
     /* Rebind offline, then provide a newer table + only this game's ZIP.
      * Automatic checks must preserve edits and never fetch another game. */
     char package_path[768], keys[768], from[768], to[768];
-    snprintf( package_path, sizeof(package_path), "%s/profiles/profile-newpal-v%u.zip", argv[1], base_version );
+    snprintf( package_path, sizeof(package_path), "%s/profiles/profile-newpal-steam-v%u.zip", argv[1], base_version );
     snprintf( keys, sizeof(keys), "%s/Game.keys.txt", argv[1] );
     struct game_profile_catalog *catalog = calloc( 1, sizeof(*catalog) );
     assert( game_profiles_load( package_path, catalog ) == GAME_PROFILE_OK );
@@ -137,7 +137,7 @@ int main( int argc, char **argv )
     struct launcher_kv options; assert( launcher_kv_load( &options, settings_path ) );
     assert( launcher_kv_set( &options, "window-fit", "0" ) && launcher_kv_save( &options, settings_path ) );
     char updated_package[64];
-    snprintf( updated_package, sizeof(updated_package), "profile-newpal-v%u.zip", base_version + 1 );
+    snprintf( updated_package, sizeof(updated_package), "profile-newpal-steam-v%u.zip", base_version + 1 );
     const char *files[] = {"autorun-profiles.tsv", updated_package};
     for (int i = 0; i < 2; i++)
     {
@@ -148,7 +148,7 @@ int main( int argc, char **argv )
         while ((n = fread( buffer, 1, sizeof(buffer), src ))) assert( fwrite( buffer, 1, n, dst ) == n );
         fclose( src ); fclose( dst );
     }
-    snprintf( to, sizeof(to), "%s/profiles/profile-zhaoyun-2002ls-v%u.zip", argv[1], other_version ); assert( !unlink( to ) );
+    snprintf( to, sizeof(to), "%s/profiles/profile-zhaoyunzhuan-v%u.zip", argv[1], other_version ); assert( !unlink( to ) );
     assert( launcher_profiles_before_start( NULL, argv[1], exe ) );
     struct game_profile_binding binding;
     assert( game_profile_binding_read( settings_path, &binding ) == GAME_PROFILE_OK && binding.version == base_version + 1 );

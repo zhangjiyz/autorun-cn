@@ -431,7 +431,7 @@ int main( int argc, char **argv )
     memset( &request, 0, sizeof(request) );
     request.nro_path = nro_file;
     request.name = "Autorun 32-bit";
-    request.author = "ticoverse.com";
+    request.author = "cn by zhangjiyz";
     request.address_space = WINE_NX_SPACE_32BIT_NO_ALIAS;
     request.icon = wine_nx_icon_32bit;
     request.icon_size = wine_nx_icon_32bit_size;
@@ -455,7 +455,7 @@ int main( int argc, char **argv )
     meta = read_nca( 3, &meta_size );
     check_program( program, program_size, nro_file );
     check_exefs_npdm( program, WINE_NX_SPACE_32BIT_NO_ALIAS, tid );
-    check_control( control, control_size, "Autorun 32-bit", "ticoverse.com", "autorun-nro-nacp", tid );
+    check_control( control, control_size, "Autorun 32-bit", "cn by zhangjiyz", "autorun-nro-nacp", tid );
     assert( nca_of( meta )->content_type == NCA_CONTENT_META );
     assert( nca_of( meta )->fs_header[0].fs_type == NCA_FS_PFS0 );
     assert( nca_of( meta )->size == meta_size );

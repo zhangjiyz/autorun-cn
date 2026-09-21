@@ -1,0 +1,10 @@
+title=仙剑奇侠传二
+d3d=wine
+own-controls=1
+controller=keyboard
+verbose=0
+windows=compositor
+window-fit=1
+sd-stat-cache=1
+sd-clean-writer-cache=1
+locale=zh_CN.UTF-8

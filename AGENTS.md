@@ -43,7 +43,7 @@
 ## 新仙剑 2001 当前边界
 
 - 目标是根目录的 32 位 `Palgame.exe`，不是 `Data/Palgame.exe`，也不是 `NewPAL_Release.exe`。
-- 使用 `wine-nx-probe/profiles/newpal-2001-palgame/`；设备上游戏目录自带的 DDrawCompat 必须保持停用。
+- 使用 `wine-nx-probe/profiles/newpalxp/`；设备上游戏目录自带的 DDrawCompat 必须保持停用。
 - `wined3d-frontbuffer-swap=1` 是单游戏开关，不能变成所有游戏默认行为。
 - Bink 视频阶段与正式游戏阶段使用不同的 DirectDraw 提交路径。分析时同时检查 Lock/Unlock、主表面更新、Flip 和 Blt，不能只看视频能否播放。
 - 当前详细证据、最近一次失败、已上传但尚未验证的实验和下一步见根目录 `MEMORY.md`。

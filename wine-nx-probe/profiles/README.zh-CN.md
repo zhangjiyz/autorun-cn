@@ -63,8 +63,9 @@ python3 wine-nx-probe/tools/package-profiles.py --output-dir dist/profiles
 
 ```text
 autorun-profiles.tsv
-profile-newpal-v1.zip
-profile-zhaoyun-2002ls-v1.zip
+profile-newpal-steam-v1.zip
+profile-newpalxp-v1.zip
+profile-zhaoyunzhuan-v1.zip
 ```
 
 每个 ZIP 内只有对应游戏的 manifest、settings、keys，以及可选的 cheats 和 cover。每个包独立版本、独立 SHA-256，不再发布聚合 `autorun-profiles.zip`。旧聚合包只保留读取兼容与回归测试，新的在线列表不会下载它。
@@ -138,7 +139,7 @@ v21-v23 的 `repository/tag` 设置会被读为对应 CNB 仓库的管理表地�
 
 ## 封面
 
-把 PNG 放入该游戏配置目录，例如 `newpal/cover.png`，在对应 catalog 条目增加 `"cover": "newpal/cover.png"`，然后重新打包。测试时保持现有 `version`；维护者明确要求发布新版本时才递增。建议竖版 2:3 封面；启动器按各展示区域缩放裁切。未声明时无需占位图。
+把 PNG 放入该游戏配置目录，例如 `newpal-steam/cover.png`，在对应 catalog 条目增加 `"cover": "newpal-steam/cover.png"`，然后重新打包。测试时保持现有 `version`；维护者明确要求发布新版本时才递增。建议竖版 2:3 封面；启动器按各展示区域缩放裁切。未声明时无需占位图。
 
 玩家应用选中的适配包后，封面以该 EXE 独立路径安装，自动设置为当前封面并立即刷新，不必重启启动器。同目录不同 EXE 不共享该文件。所有条目的资源虽在同一下载包中，只安装玩家选中的那个条目。
 

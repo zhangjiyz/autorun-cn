@@ -171,32 +171,47 @@ static void test_open_files(void)
     struct sd_cache_pool pool = { 0, 64 };
     struct fake_file f = make_file( 1000 );
     struct sd_cache_file *list = NULL, *reader, *writer, *late, *after, *lang;
+    struct sd_cache_file *legacy_reader, *legacy_writer;
     char buf[10];
 
     assert( sd_cache_same_path( grf, "/switch//wine/drive_c/openttd/baseset/openttd.grf/" ) );
     assert( sd_cache_same_path( "sdmc:/a/B", "sdmc:/A/b" ) && !sd_cache_same_path( "sdmc:/a/b", "sdmc:/a/bc" ) );
     assert( !sd_cache_same_path( "sdmc:/a/b", "sdmc:/a" ) );
 
-    reader = sd_cache_opened( &list, &pool, (void *)1, grf, 0 );
+    /* With the per-game option disabled, opening a writer retains the former
+     * behavior and drops cached readers of the same path. */
+    legacy_reader = sd_cache_opened( &list, &pool, (void *)10, "/legacy.dat", 0, 0 );
+    assert( legacy_reader && cached_read( legacy_reader, &pool, &f, 0, buf, sizeof(buf) ) == 10 );
+    legacy_writer = sd_cache_opened( &list, &pool, (void *)11, "/LEGACY.DAT", 1, 0 );
+    assert( legacy_writer && !legacy_writer->cacheable && !legacy_reader->cacheable && !pool.used );
+    sd_cache_closed( &list, &pool, (void *)10 );
+    sd_cache_closed( &list, &pool, (void *)11 );
+
+    reader = sd_cache_opened( &list, &pool, (void *)1, grf, 0, 1 );
     assert( reader && reader->cacheable && !reader->writable );
     assert( cached_read( reader, &pool, &f, 0, buf, sizeof(buf) ) == 10 && pool.used == 1 );
 
-    /* A writer of the same file stops caching of the open reader. */
-    writer = sd_cache_opened( &list, &pool, (void *)2, "/switch/wine/drive_c/openttd/baseset/openttd.grf", 1 );
-    assert( writer && !writer->cacheable && !reader->cacheable && !reader->lines[0].data && !pool.used );
+    /* Asking for write access alone does not discard clean cached data. Old
+     * games often open databases read/write and then only inspect them. */
+    writer = sd_cache_opened( &list, &pool, (void *)2, "/switch/wine/drive_c/openttd/baseset/openttd.grf", 1, 1 );
+    assert( writer && writer->cacheable && reader->cacheable && reader->lines[0].data && pool.used == 1 );
 
-    /* A reader opened while the writer is open is not cached either. */
-    late = sd_cache_opened( &list, &pool, (void *)3, grf, 0 );
-    assert( late && !late->cacheable );
+    /* Readers opened while the writer remains clean can cache too. */
+    late = sd_cache_opened( &list, &pool, (void *)3, grf, 0, 1 );
+    assert( late && late->cacheable );
+
+    /* The first actual write invalidates all matching handles. */
+    sd_cache_modified( list, &pool, (void *)2 );
+    assert( writer->dirty && !writer->cacheable && !reader->cacheable && !late->cacheable && !pool.used );
     sd_cache_closed( &list, &pool, (void *)2 );
     assert( !sd_cache_find( list, (void *)2 ) && sd_cache_find( list, (void *)3 ) == late );
 
     /* After the writer closes, a new reader is cached. */
-    after = sd_cache_opened( &list, &pool, (void *)4, grf, 0 );
+    after = sd_cache_opened( &list, &pool, (void *)4, grf, 0, 1 );
     assert( after && after->cacheable );
 
     /* Renaming or removing a path forgets it. */
-    lang = sd_cache_opened( &list, &pool, (void *)5, "sdmc:/switch/wine/drive_c/openttd/lang/english.lng", 0 );
+    lang = sd_cache_opened( &list, &pool, (void *)5, "sdmc:/switch/wine/drive_c/openttd/lang/english.lng", 0, 1 );
     assert( cached_read( lang, &pool, &f, 0, buf, sizeof(buf) ) == 10 && pool.used == 1 );
     sd_cache_forget_path( list, &pool, "sdmc:/switch/wine/drive_c/openttd/lang/ENGLISH.LNG" );
     assert( !lang->cacheable && !pool.used && after->cacheable );
@@ -221,7 +236,7 @@ static int fake_stat( void *ctx, struct stat *st )
     return 0;
 }
 
-static void test_readonly_metadata(void)
+static void test_metadata(void)
 {
     struct sd_cache_pool pool = {0, 64};
     struct sd_cache_file *list = NULL, *reader, *writer;
@@ -229,7 +244,7 @@ static void test_readonly_metadata(void)
     struct stat st;
     unsigned int queries = 0, i;
     f.size = 123456;
-    reader = sd_cache_opened( &list, &pool, (void *)1, "sdmc:/Data/ALL.SND", 0 );
+    reader = sd_cache_opened( &list, &pool, (void *)1, "sdmc:/Data/ALL.SND", 0, 1 );
     f.fail = 1;
     assert( sd_cache_read_stat( reader, &st, fake_stat, &f, &queries ) == -1 && !reader->stat_valid );
     f.fail = 0;
@@ -239,20 +254,34 @@ static void test_readonly_metadata(void)
         assert( st.st_size == 123456 && st.st_mtime == 123 );
     }
     assert( queries == 2 && f.requests == 2 ); /* failed once, then fetched once */
-    writer = sd_cache_opened( &list, &pool, (void *)2, "/data/all.snd", 1 );
-    assert( writer && !reader->stat_valid && !reader->cacheable );
+    writer = sd_cache_opened( &list, &pool, (void *)2, "/data/all.snd", 1, 1 );
+    assert( writer && writer->stat_cacheable && reader->stat_valid && reader->cacheable );
     f.size = 654321;
+    assert( !sd_cache_read_stat( writer, &st, fake_stat, &f, &queries ) && writer->stat_valid );
+    assert( !sd_cache_read_stat( writer, &st, fake_stat, &f, &queries ) && st.st_size == f.size );
+    assert( queries == 3 );
+
+    /* A real write, unlike read/write access alone, invalidates all matching
+     * handles and prevents new metadata caching while that writer is open. */
+    sd_cache_modified( list, &pool, (void *)2 );
+    assert( writer->dirty && !writer->stat_cacheable && !writer->stat_valid && !reader->stat_cacheable );
     assert( !sd_cache_read_stat( reader, &st, fake_stat, &f, &queries ) && st.st_size == f.size );
     assert( !sd_cache_read_stat( writer, &st, fake_stat, &f, &queries ) && !writer->stat_valid );
-    assert( queries == 4 );
+    assert( queries == 5 );
+    {
+        struct sd_cache_file *late = sd_cache_opened( &list, &pool, (void *)3, "/data/all.snd", 0, 1 );
+        assert( late && !late->stat_cacheable );
+        sd_cache_closed( &list, &pool, (void *)3 );
+    }
     sd_cache_closed( &list, &pool, (void *)1 );
     sd_cache_closed( &list, &pool, (void *)2 );
-    reader = sd_cache_opened( &list, &pool, (void *)1, "/data/all.snd", 0 );
+    reader = sd_cache_opened( &list, &pool, (void *)1, "/data/all.snd", 0, 1 );
     assert( !reader->stat_valid ); /* per-open pointer reused */
     assert( !sd_cache_read_stat( reader, &st, fake_stat, &f, &queries ) && reader->stat_valid );
-    sd_cache_forget_path( list, &pool, "/data/all.snd" ); /* rename, unlink or truncate */
+    sd_cache_forget_path( list, &pool, "/data/all.snd" ); /* rename or unlink */
     f.size = 99;
-    assert( !reader->stat_valid && !sd_cache_read_stat( reader, &st, fake_stat, &f, &queries ) && st.st_size == 99 );
+    assert( !reader->stat_valid && !reader->stat_cacheable );
+    assert( !sd_cache_read_stat( reader, &st, fake_stat, &f, &queries ) && st.st_size == 99 );
     assert( !sd_cache_read_stat( NULL, &st, fake_stat, &f, &queries ) ); /* untracked / disabled */
     sd_cache_closed( &list, &pool, (void *)1 );
     assert( !list );
@@ -265,7 +294,7 @@ int main(void)
     test_least_recently_used();
     test_failures_and_memory();
     test_open_files();
-    test_readonly_metadata();
+    test_metadata();
     puts( "SD read cache: sprite reads, end of file, least recently used, failures, memory limit and open "
           "files passed" );
     return 0;
