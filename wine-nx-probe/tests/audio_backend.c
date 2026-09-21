@@ -43,7 +43,7 @@ void *memalign(size_t alignment, size_t size)
 NTSTATUS WINAPI NtAllocateVirtualMemory(HANDLE proc, void **p, ULONG_PTR bits, SIZE_T *size, ULONG type, ULONG prot)
 {
     (void)proc; (void)type; (void)prot;
-    assert(bits == 0xffffffff00000000ULL);
+    assert(bits == 0x7fffffff);
     *p = calloc(1, *size); return *p ? 0 : STATUS_NO_MEMORY;
 }
 NTSTATUS WINAPI NtFreeVirtualMemory(HANDLE proc, void **p, SIZE_T *size, ULONG type)
@@ -80,16 +80,20 @@ int main(void)
     wine_nx_audio_unix_funcs[create_stream](&create); assert(create.result == S_OK && channels == 2 && handle);
     assert(create_logs == 1);
     {
-        stream_handle rejected = 0;
+        stream_handle second_handle = 0;
         struct create_stream_params second = create;
-        second.stream = &rejected;
+        struct release_stream_params second_release;
+        second.stream = &second_handle;
         nx_create_stream(&second);
-        assert(second.result == AUDCLNT_E_DEVICE_IN_USE && !rejected && create_logs == 2);
+        assert(second.result == S_OK && second_handle && create_logs == 2);
+        second_release.stream = second_handle; second_release.timer_thread = NULL;
+        nx_release_stream(&second_release);
+        assert(second_release.result == S_OK && !streams[1]);
     }
     s = nx_stream(handle);
     get.stream = put.stream = handle;
     wine_nx_audio_unix_funcs[get_render_buffer](&get);
-    assert(get.result == S_OK && data && (UINT_PTR)data > 0xffffffffu);
+    assert(get.result == S_OK && data);
     for (i = 0; i < total; i++) { ((short *)data)[i*2] = i; ((short *)data)[i*2+1] = -i; }
     nx_release_render_buffer(&put); assert(put.result == S_OK && s->held == total);
     startp.stream = handle; nx_start(&startp);
@@ -98,11 +102,34 @@ int main(void)
     assert(s->held == total && s->submitted == NX_BUFFERS * NX_CHUNK && !s->played);
     assert(((short *)queued[0]->buffer)[2] == 1);
     assert(((short *)queued[1]->buffer)[0] == NX_CHUNK);
-    nx_pump(s); assert(s->held == total && !s->played);
-    ready = 1; nx_pump(s);
-    assert(s->held == total - NX_CHUNK && s->played == NX_CHUNK && queued_count == NX_BUFFERS);
-    assert(((short *)queued[NX_BUFFERS - 1]->buffer)[0] == (short)(NX_BUFFERS * NX_CHUNK));
-    ready = NX_BUFFERS; nx_pump(s);
+    nx_pump(); assert(s->held == total && !s->played);
+    /* A second shared client can run beside the first one.  The next hardware
+     * buffer contains both clients instead of failing with DEVICE_IN_USE. */
+    {
+        stream_handle second_handle = 0;
+        struct create_stream_params second = create;
+        struct get_render_buffer_params second_get = {.frames=NX_CHUNK, .data=&data};
+        struct release_render_buffer_params second_put = {.written_frames=NX_CHUNK};
+        struct start_params second_start;
+        struct release_stream_params second_release;
+        struct nx_audio_stream *second_stream;
+        second.stream = &second_handle;
+        nx_create_stream(&second); assert(second.result == S_OK && second_handle);
+        second_stream = nx_stream(second_handle);
+        second_get.stream = second_put.stream = second_handle;
+        nx_get_render_buffer(&second_get); assert(second_get.result == S_OK);
+        for (i = 0; i < NX_CHUNK; i++) { ((short *)data)[i*2] = 100; ((short *)data)[i*2+1] = 200; }
+        nx_release_render_buffer(&second_put); assert(second_put.result == S_OK);
+        second_start.stream = second_handle; nx_start(&second_start); assert(second_start.result == S_OK);
+        ready = 1; nx_pump();
+        assert(second_stream->submitted == NX_CHUNK && queued_count == NX_BUFFERS);
+        assert(((short *)queued[NX_BUFFERS - 1]->buffer)[0] == (short)(NX_BUFFERS * NX_CHUNK + 100));
+        assert(((short *)queued[NX_BUFFERS - 1]->buffer)[1] == (short)(-(int)(NX_BUFFERS * NX_CHUNK) + 200));
+        ready = NX_BUFFERS; nx_pump();
+        assert(!second_stream->held && second_stream->played == NX_CHUNK);
+        second_release.stream = second_handle; second_release.timer_thread = NULL;
+        nx_release_stream(&second_release); assert(second_release.result == S_OK);
+    }
     assert(!s->held && s->played == total && !queued_count);
     /* Cross the ring boundary, preserving order and silence. */
     put.flags = AUDCLNT_BUFFERFLAGS_SILENT;
@@ -112,9 +139,9 @@ int main(void)
         get.frames = put.written_frames = NX_CHUNK;
         nx_get_render_buffer(&get); assert(get.result == S_OK);
         nx_release_render_buffer(&put); assert(put.result == S_OK);
-        nx_pump(s); assert(queued_count == 1);
+        nx_pump(); assert(queued_count == 1);
         for (i = 0; i < NX_CHUNK; i++) assert(((short *)queued[0]->buffer)[i*2] == 0);
-        ready = 1; nx_pump(s);
+        ready = 1; nx_pump();
         if (s->read < before) wrapped = TRUE;
     }
     assert(wrapped);
@@ -128,21 +155,30 @@ int main(void)
     nx_reset(&resetp); assert(resetp.result == AUDCLNT_E_BUFFER_OPERATION_PENDING);
     put.written_frames = 0; nx_release_render_buffer(&put); assert(put.result == S_OK);
     release.stream = handle; release.timer_thread = NULL; nx_release_stream(&release);
-    assert(release.result == S_OK && !active && !queued_count);
+    assert(release.result == S_OK && !streams[0] && !queued_count);
     /* Common application format: mono 44.1 kHz float is converted to the
      * Switch's stereo 48 kHz signed-16 stream. */
     {
         WAVEFORMATEX converted = {WAVE_FORMAT_IEEE_FLOAT, 1, 44100, 176400, 4, 32, 0};
         struct create_stream_params converted_create = {.flow=eRender, .share=AUDCLNT_SHAREMODE_SHARED,
             .duration=400000, .fmt=&converted, .channel_count=&channels, .stream=&handle};
+        UINT32 source_capacity = 0, padding = 0;
+        struct get_buffer_size_params sizep = {.frames=&source_capacity};
+        struct get_current_padding_params paddingp = {.padding=&padding};
         float *source;
         nx_create_stream(&converted_create);
         assert(converted_create.result == S_OK && handle);
+        sizep.stream = paddingp.stream = handle;
+        nx_get_buffer_size(&sizep);
+        assert(sizep.result == S_OK && source_capacity == nx_stream(handle)->source_capacity);
+        assert(nx_stream(handle)->scratch_bytes == source_capacity * converted.nBlockAlign);
         get.stream = put.stream = handle; get.frames = put.written_frames = 441;
         nx_get_render_buffer(&get); assert(get.result == S_OK);
         source = (float *)data;
         for (i = 0; i < 441; i++) source[i] = i == 0 ? 0.5f : 0.0f;
         nx_release_render_buffer(&put); assert(put.result == S_OK && nx_stream(handle)->held == 480);
+        nx_get_current_padding(&paddingp);
+        assert(paddingp.result == S_OK && padding == 441);
         release.stream = handle; release.timer_thread = NULL; nx_release_stream(&release);
         assert(release.result == S_OK);
     }

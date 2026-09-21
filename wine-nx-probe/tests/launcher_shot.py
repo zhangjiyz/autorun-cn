@@ -9,16 +9,16 @@ fixed point; the colour there is the game's, dimmed the way a card that does not
 have the focus is drawn.
 
   launcher_shot.py stage <card> <exe> <count>      games, art and the catalog
-  launcher_shot.py check <shot.png> <first> <slot> the ten cards it must show
+  launcher_shot.py check <shot.png> <first> <slot> the fourteen cards it must show
 """
 import struct
 import sys
 import zlib
 from pathlib import Path
 
-# launcher.c: SHELL_MARGIN 84, UI_HEADER_HEIGHT 80, FOOTER_SPACE 38, card 204,
-# gaps 22 and 16, caption 36: five columns over two rows at 1280x720.
-X0, Y0, CARD, GAP_X, GAP_Y, CAPTION, COLUMNS, ROWS = 84, 137, 204, 22, 16, 36, 5, 2
+# launcher.c: SHELL_MARGIN 84, UI_HEADER_HEIGHT 80, FOOTER_SPACE 38, card 140x210,
+# gaps 22 and 16, caption 36: seven columns over two rows at 1280x720.
+X0, Y0, CARD, CARD_H, GAP_X, GAP_Y, CAPTION, COLUMNS, ROWS = 84, 131, 140, 210, 22, 16, 36, 7, 2
 # draw_card dims what does not have the focus; the selected card is drawn whole.
 DIM = 190
 
@@ -113,7 +113,7 @@ def card_colours(path):
     for row in range(ROWS):
         for column in range(COLUMNS):
             x = X0 + column * (CARD + GAP_X) + CARD // 2
-            y = Y0 + row * (CARD + CAPTION + GAP_Y) + CARD // 2
+            y = Y0 + row * (CARD_H + CAPTION + GAP_Y) + CARD_H // 2
             pixel = rows[y][x * channels:x * channels + 3]
             colours.append((pixel[0], pixel[1], pixel[2]))
     return colours
@@ -137,11 +137,11 @@ def check(path, first, slot, least=10):
         if max(abs(a - b) for a, b in zip(shown, want)) > 2:
             wrong.append(f'card {index} shows {shown}, not game {game} as {want}')
     if seen < least:
-        wrong.append(f'only {seen} of the ten cards had a cover, wanted {least}')
+        wrong.append(f'only {seen} of the fourteen cards had a cover, wanted {least}')
     if wrong:
         print(f'{path}:', *wrong, sep='\n  ')
         return 1
-    print(f'{Path(path).name}: {seen} cards, games {first} to {first + 9}, cover by cover')
+    print(f'{Path(path).name}: {seen} cards, games {first} to {first + COLUMNS * ROWS - 1}, cover by cover')
     return 0
 
 

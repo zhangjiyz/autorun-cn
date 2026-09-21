@@ -1,3 +1,4 @@
+title=三国赵云传
 own-controls=1
 aspect-fit=800x600
 touch-coordinates=screen

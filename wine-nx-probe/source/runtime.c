@@ -47,6 +47,7 @@
 C_ASSERT( FIELD_OFFSET( TEB, TlsSlots[WOW64_TLS_CPURESERVED] ) == NX_PROF_TEB_CPU_AREA );
 C_ASSERT( sizeof(WOW64_CPURESERVED) == NX_PROF_CPU_CONTEXT && TYPE_ALIGNMENT( I386_CONTEXT ) <= NX_PROF_CPU_CONTEXT );
 C_ASSERT( FIELD_OFFSET( I386_CONTEXT, Ebp ) == NX_PROF_I386_EBP );
+C_ASSERT( FIELD_OFFSET( I386_CONTEXT, Eip ) == NX_PROF_I386_EIP );
 C_ASSERT( FIELD_OFFSET( I386_CONTEXT, Esp ) == NX_PROF_I386_ESP );
 
 u32 __nx_applet_type = AppletType_Application;
@@ -418,8 +419,11 @@ int wine_nx_runtime_verbose;
 static int runtime_profile;
 static int runtime_dxvk;
 static int runtime_dxvk_hud;
+static int runtime_wined3d_gdi;
+static int runtime_wined3d_frontbuffer_swap;
 static char runtime_vkd3d_version[32];
 static char runtime_dxvk_version[32];
+static char runtime_locale[48];
 
 /* libdrm_nouveau's switch for CPU-cacheable pinned GPU memory, cleared by
  * sdmc:/switch/wine/gl-uncached.txt containing 1. */
@@ -1747,7 +1751,7 @@ static const char runtime_environment[] =
     "USERNAME=wine\0"
     "USERPROFILE=C:\\users\\wine\0"
     "windir=C:\\windows\0"
-    "WINE_D3D_CONFIG=cs_spin_count=64,explicit_buffer_flush=1\0"
+    "WINE_D3D_CONFIG=\0"
     "WINE_NX_RAW_INPUT=1\0";
 
 /* Horizon has no console device: the standard handles are files next to the
@@ -1778,9 +1782,14 @@ static RTL_USER_PROCESS_PARAMETERS *runtime_create_process_params( const char *t
     WCHAR *cursor;
     const char *cmdline_str, *dxvk_hud = launcher_hud_values[runtime_dxvk_hud];
     char dxvk_dir[96], vkd3d_dir[96], vkd3d_path[104] = "", graphics_path[208] = "";
+    char wined3d_config[96];
     int cmdline_len, sdl_directsound = 0;
     int dxvk_path = launcher_dxvk_version_directory( main_image_info.Machine, runtime_dxvk_version,
                                                      dxvk_dir, sizeof(dxvk_dir) );
+
+    snprintf( wined3d_config, sizeof(wined3d_config), "cs_spin_count=64,explicit_buffer_flush=1%s%s",
+              runtime_wined3d_gdi ? ",renderer=gdi" : "",
+              runtime_wined3d_frontbuffer_swap ? ",nx_frontbuffer_swap=1" : "" );
 
     if (!target_to_dos_path( target, dos_path, dos_path_size )) return NULL;
     dos_dirname( dos_path, current_dir, sizeof(current_dir) );
@@ -1962,7 +1971,8 @@ static RTL_USER_PROCESS_PARAMETERS *runtime_create_process_params( const char *t
     chars += strlen( cmdline_str ) + 1;
     chars += strlen( dos_path ) + 1;
     chars += strlen( nt_path ) + 1;
-    chars += sizeof(runtime_environment) + strlen( graphics_path ) + strlen( dxvk_hud ) - 1;
+    chars += sizeof(runtime_environment) + strlen( graphics_path ) + strlen( dxvk_hud ) +
+             strlen( wined3d_config ) - 1;
     if (sdl_directsound) chars += sizeof("SDL_AUDIODRIVER=directsound");
     size = sizeof(*params) + chars * sizeof(WCHAR);
 
@@ -1994,6 +2004,11 @@ static RTL_USER_PROCESS_PARAMETERS *runtime_create_process_params( const char *t
         {
             for (i = 0; i < 9; i++) *cursor++ = (unsigned char)*value++;
             value = dxvk_hud;
+        }
+        if (!strncmp( entry, "WINE_D3D_CONFIG=", sizeof("WINE_D3D_CONFIG=") - 1 ))
+        {
+            for (i = 0; i < sizeof("WINE_D3D_CONFIG=") - 1; i++) *cursor++ = (unsigned char)*value++;
+            value = wined3d_config;
         }
         if (!strncmp( entry, "PATH=", 5 ))
         {
@@ -3812,6 +3827,9 @@ int main( int argc, char **argv )
 #endif
         runtime_vkd3d_version[0] = 0;
         runtime_dxvk_version[0] = 0;
+        runtime_locale[0] = 0;
+        runtime_wined3d_gdi = 0;
+        runtime_wined3d_frontbuffer_swap = 0;
         if (target[1] != ':' &&
             launcher_program_settings_path( RUNTIME_DIR, target, settings_path, sizeof(settings_path) ) &&
             launcher_kv_load( &kv, settings_path ) && kv.size)
@@ -3820,6 +3838,32 @@ int main( int argc, char **argv )
             if (settings.verbose >= 0) wine_nx_runtime_verbose = settings.verbose;
             if (settings.profile >= 0) runtime_profile = settings.profile;
             if (settings.framebuffer >= 0) wine_nx_compositor_mode = !settings.framebuffer;
+            if (launcher_kv_get( &kv, "locale", runtime_locale, sizeof(runtime_locale) ) &&
+                strspn( runtime_locale, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.@-" ) !=
+                    strlen( runtime_locale ))
+                runtime_locale[0] = 0;
+            {
+                char renderer[16];
+
+                if (launcher_kv_get( &kv, "wined3d-renderer", renderer, sizeof(renderer) ))
+                {
+                    if (!strcasecmp( renderer, "gdi" ) || !strcasecmp( renderer, "no3d" ))
+                        runtime_wined3d_gdi = 1;
+                    else log_line( "[WINED3D] unsupported profile renderer '%s'; using OpenGL", renderer );
+                }
+            }
+            {
+                char frontbuffer_swap[8];
+
+                if (launcher_kv_get( &kv, "wined3d-frontbuffer-swap", frontbuffer_swap,
+                                     sizeof(frontbuffer_swap) ))
+                {
+                    if (!strcmp( frontbuffer_swap, "1" )) runtime_wined3d_frontbuffer_swap = 1;
+                    else if (strcmp( frontbuffer_swap, "0" ))
+                        log_line( "[WINED3D] invalid wined3d-frontbuffer-swap '%s'; disabled",
+                                  frontbuffer_swap );
+                }
+            }
 #ifdef WINE_NX_MESA_SWITCH
             runtime_dxvk = settings.dxvk;
             runtime_dxvk_hud = settings.dxvk_hud;
@@ -3856,6 +3900,9 @@ int main( int argc, char **argv )
 #else
                       settings.dxvk ? "Wine (DXVK needs the Vulkan runtime)" : "Wine" );
 #endif
+            if (runtime_wined3d_gdi) log_line( "[WINED3D] profile renderer=gdi (2D/no3d swapchain)" );
+            if (runtime_wined3d_frontbuffer_swap)
+                log_line( "[WINED3D] profile presents DirectDraw front-buffer updates through GL swaps" );
         }
     }
 
@@ -3911,6 +3958,16 @@ int main( int argc, char **argv )
         log_line( "[TEST] NULL deref did NOT fault, value=%d (handler not wired correctly)", observed );
     }
 #endif
+    /* Wine derives its ANSI/OEM code pages from the Unix locale before the
+     * first TEB exists.  Horizon's C library may not install that locale, but
+     * Wine deliberately falls back to LC_ALL's value when setlocale rejects
+     * it.  This lets a per-game profile select GBK for legacy Chinese ANSI
+     * resources without changing every game's process. */
+    if (runtime_locale[0])
+    {
+        setenv( "LC_ALL", runtime_locale, 1 );
+        log_line( "[NLS] profile locale=%s", runtime_locale );
+    }
     wine_nx_runtime_environment_init();
     log_line( "[INIT] Wine NLS/environment ready" );
     teb = virtual_alloc_first_teb();

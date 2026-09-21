@@ -52,7 +52,7 @@ Autorun 是一款在 Switch 上运行 Windows 游戏和程序的自制软件。�
 
 在游戏配置的“常规 → 适配包更新”中，首次按名称或关键词筛选并选择适配包；应用后记住绑定，后续只检查这个适配包的更新。应用前备份配置，更新时保留玩家后来修改的值，也可恢复上次配置。目前支持 SD 卡游戏。适配包可携带封面，应用后自动显示；单游戏“金手指”菜单支持总开关、逐项开关和数值保存，目前是框架，具体游戏效果尚未接入。
 
-维护者编辑 [适配映射表](wine-nx-probe/profiles/catalog.json)，通过 [适配包发布说明](wine-nx-probe/profiles/README.zh-CN.md) 生成 GitHub Release 附件。主程序使用本项目最新正式 Release 的 `autorun.zip`；适配功能使用一张 `autorun-profiles.tsv` 管理表和每游戏一个独立 ZIP，只下载选中的游戏包。主程序“设置 → 系统 → 适配包管理”可修改管理表地址、手动更新表，或开启启动前自动更新已绑定游戏。游戏本体需自行准备。
+维护者编辑 [适配映射表](wine-nx-probe/profiles/catalog.json)，通过 [适配包发布说明](wine-nx-probe/profiles/README.zh-CN.md) 生成 CNB Release 附件。Release 主程序使用 `PalmMuse/autorun-cn` 最新正式 Release 的 `autorun.zip`；Debug 主程序使用构建时指定的固定测试标签并允许预发布。适配功能使用一张 `autorun-profiles.tsv` 管理表和每游戏一个独立 ZIP，只下载选中的游戏包。主程序“设置 → 系统 → 适配包管理”可修改管理表地址、手动更新表，或开启启动前自动更新已绑定游戏。游戏本体需自行准备。
 
 ## 添加游戏
 
@@ -107,9 +107,9 @@ Autorun 是一款在 Switch 上运行 Windows 游戏和程序的自制软件。�
 
 ### 《三国赵云传》示例配置
 
-安装包的 `switch/wine/profiles/zhaoyun` 下有这款游戏的专用按键、鼠标模式补丁脚本和操作说明。将 `Game.keys.txt` 复制到你自己的 `Game.exe` 旁边，并在该游戏的 `Game.wine-nx.txt` 中设置 `own-controls=1`、`left-stick-run=shift`、`left-stick-eight-way=1`、`left-stick-aim=140` 和 `left-stick-move=mouse`。默认左摇杆按实际角度沿圆周连续定位鼠标并按住左键移动，按住 L3 为键盘步行；默认速度取决于游戏底部的“走／跑”按钮。右摇杆左/上/右切换弓/剑/枪，十字键与 L/ZL/R/ZR 对应道具快捷栏 1–8；A 发送空格，B 发送鼠标右键，X 发送 Ctrl，Y 发送 C。触屏定位和菜单点击此前已在 Switch 上确认；连续圆周摇杆方案尚待实机验证，完整说明见配置旁的文档。
+通过主程序为这款游戏选择赵云传适配包，会自动应用专用按键、显示设置和经过 SHA-256 限定的鼠标模式补丁。主程序先备份匹配的 `Game.exe`，再由原生代码修改固定字节；不执行下载脚本，版本不符时保持游戏不变。默认左摇杆按实际角度沿圆周连续定位鼠标并按住左键移动，按住 L3 为键盘步行；默认速度取决于游戏底部的“走／跑”按钮。右摇杆左/上/右切换弓/剑/枪，十字键与 L/ZL/R/ZR 对应道具快捷栏 1–8；A 发送空格，B 发送鼠标右键，X 发送 Ctrl，Y 发送 C。触屏定位和菜单点击此前已在 Switch 上确认；连续圆周摇杆方案尚待实机验证，完整说明见配置旁的文档。
 
-如果游戏以 800×600 运行、画面靠左，可以在同一份 `Game.wine-nx.txt` 中设置 `aspect-fit=800x600`。这会将 WineD3D 已放大的 960×720 画面居中。针对这份《三国赵云传》2002ls 可执行文件，再设置 `touch-coordinates=screen`，并按配置旁的说明修改你自己的 `Game.exe` 鼠标模式，触屏就会按 Switch 屏幕位置定位。其他图形路径仍需逐一验证。
+如果游戏以 800×600 运行、画面靠左，适配包中的 `aspect-fit=800x600` 会将 WineD3D 已放大的 960×720 画面居中；`touch-coordinates=screen` 配合自动应用的 EXE 鼠标补丁，让触屏按 Switch 屏幕位置定位。其他图形路径仍需逐一验证。
 
 《新仙剑奇侠传》NewPAL 2.17.102.0 的实机验证配置见 [NewPAL 配置说明](wine-nx-probe/profiles/newpal/README.zh-CN.md)，包含独立键盘映射和 `controller=keyboard` 强制键盘模式。造成重叠嫌疑的居中设置已撤回。
 
@@ -133,7 +133,9 @@ Autorun 是一款在 Switch 上运行 Windows 游戏和程序的自制软件。�
 
 ## 开发者资料
 
-本地一键检查和发布打包：`./local-ci.sh all` 生成 `autorun.zip`、一张 `autorun-profiles.tsv` 管理表和每游戏独立 ZIP；`./local-ci.sh profiles` 只生成管理表和游戏适配包。CI 校验管理表与每个包的版本、内容、哈希和长度，主程序只内置管理表。产物和校验文件保存在 `dist/local-ci/`，手动上传 GitHub Release 时先上传 ZIP，最后上传管理表。环境、参数及发布说明见[本地 CI 文档](docs/local-ci.md)。
+本地一键检查和发布打包：`./local-ci.sh all` 生成 `autorun.zip`、一张 `autorun-profiles.tsv` 管理表和每游戏独立 ZIP；`./local-ci.sh profiles` 只生成管理表和游戏适配包。CI 校验管理表与每个包的版本、内容、哈希和长度，主程序只内置管理表。产物和校验文件保存在 `dist/local-ci/`，手动上传 CNB Release 时先上传 ZIP，最后上传管理表。环境、参数及发布说明见[本地 CI 文档](docs/local-ci.md)。
+
+主程序 NACP 内部版本采用四段：前三段沿用上游，第四段是本分支的修订号。当前版本为 `0.0.1.1`，在 `wine-nx-probe/CMakeLists.txt` 中维护。
 
 Autorun 的工作方式、构建流程、测试和文件布局见[技术文档](documentation/technical.md)。更新说明另见[中文文档](wine-nx-probe/UPDATING.zh-CN.md)。
 

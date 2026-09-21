@@ -18,6 +18,12 @@ def git(source, *args):
     return subprocess.check_output(['git', '-C', str(source), *args], text=True).strip()
 
 
+def source_changes(source):
+    # Meson leaves this empty lock file in the source tree after setup.
+    return [line for line in git(source, 'status', '--porcelain', '--untracked-files=all').splitlines()
+            if line != '?? subprojects/.wraplock']
+
+
 def source_tree(source):
     if not (source / '.git').exists():
         if source.exists():
@@ -30,13 +36,13 @@ def source_tree(source):
         git(source, 'checkout', '-q', '--detach', 'FETCH_HEAD')
     if git(source, 'rev-parse', 'HEAD') != REVISION:
         raise ValueError(f'DXVK must be at {REVISION}; no files were reset')
-    if git(source, 'status', '--porcelain', '--untracked-files=all'):
+    if source_changes(source):
         raise ValueError('DXVK source or submodules are modified; no files were reset')
     git(source, 'submodule', 'update', '--init', '--recursive', '--depth=1')
     submodules = git(source, 'submodule', 'status', '--recursive')
     if any(line.startswith(('-', '+', 'U')) for line in submodules.splitlines()):
         raise ValueError('DXVK submodules do not match the release')
-    if git(source, 'status', '--porcelain', '--untracked-files=all'):
+    if source_changes(source):
         raise ValueError('DXVK source or submodules are modified')
     return submodules
 

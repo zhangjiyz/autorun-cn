@@ -2,7 +2,9 @@
 
 将 `Game.keys.txt` 放在 Switch 的 `switch/wine/drive_c/ZhaoYun/Game.exe` 旁边，并在 Autorun 的游戏设置中启用“使用游戏专用按键”。此文件只影响这款游戏。
 
-这份 2002ls 版本的游戏会用 DirectInput 相对位移更新自己的光标。要让触屏点哪里就定位到哪里，先对你自己的 `Game.exe` 运行 `python3 patch-game.py /路径/Game.exe`，再复制游戏到 SD 卡。脚本只接受已核对哈希的 2002ls 可执行文件，修改前会保存 `Game.exe.autorun-before-absolute-mouse`；`--restore` 可恢复原文件。安装包不含游戏本体。
+这份 2002ls 版本的游戏会用 DirectInput 相对位移更新自己的光标。通过主程序应用赵云传适配包时，会直接核对当前选择的 `Game.exe`，匹配后保存为 `Game.exe.autorun-before-profile-patch`，再用主程序内置的原生补丁器启用绝对鼠标模式。包内只有 SHA-256、偏移和替换字节，不执行下载的代码；哈希不匹配时不会修改游戏。主程序中的“恢复上次配置”会同时恢复原始 EXE。安装包不含游戏本体。
+
+`patch-game.py` 仍保留为电脑端手动工具，和自动适配共用 `binary-patch.json`，不需要在 Switch 上运行。
 
 在 `Game.exe` 旁边的 `Game.wine-nx.txt` 中设置：
 

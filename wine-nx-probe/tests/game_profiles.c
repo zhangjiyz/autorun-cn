@@ -39,7 +39,7 @@ int main( int argc, char **argv )
     assert( argc >= 2 );
     struct game_profile_catalog *catalog = calloc( 1, sizeof(*catalog) );
     assert( game_profiles_load( argv[1], catalog ) == GAME_PROFILE_OK );
-    assert( catalog->count == 2 );
+    assert( catalog->count == 3 );
     assert( game_profile_matches( &catalog->entries[0], "新仙剑" ) );
     assert( game_profile_matches( &catalog->entries[0], "NEWpal" ) );
     assert( !game_profile_matches( &catalog->entries[0], "not-this-game" ) );
@@ -57,15 +57,44 @@ int main( int argc, char **argv )
     char resolved[PATH_MAX]; assert( realpath( folder, resolved ) );
     snprintf( settings, sizeof(settings), "%s/Game.wine-nx.txt", resolved );
     snprintf( keys, sizeof(keys), "%s/Game.keys.txt", resolved );
+    char exe[768], patched_backup[800], patched_state[800], patched_temp[800];
+    snprintf( exe, sizeof(exe), "%s/Game.exe", resolved );
+    static const char original_exe[] = "0123456789abcdef", patched_exe[] = "0123XYZ789abcdef";
+    struct game_profile_patch binary = {
+        .original_digest = "9f9f5111f7b27a781f1f1ddde5ebc2dd2b796bfc7365c9c28b548e564176929f",
+        .patched_digest = "f0be77246ed6ebc4e59c7bf4a49901c89aa48916e0774989c898a50928c14bc3",
+        .offset = 4, .size = 3, .old_bytes = {'4','5','6'}, .new_bytes = {'X','Y','Z'}
+    };
+    assert( durable_write( exe, original_exe, sizeof(original_exe) - 1 ) );
+    int binary_changed;
+    assert( game_profile_patch_apply( exe, &binary, &binary_changed ) == GAME_PROFILE_OK && binary_changed );
+    FILE *binary_file = fopen( exe, "rb" ); char binary_data[sizeof(original_exe)] = {0}; assert( binary_file );
+    assert( fread( binary_data, 1, sizeof(patched_exe) - 1, binary_file ) == sizeof(patched_exe) - 1 && !fclose( binary_file ) );
+    assert( !memcmp( binary_data, patched_exe, sizeof(patched_exe) - 1 ) );
+    assert( patch_paths( exe, patched_backup, patched_state, patched_temp ) && !access( patched_backup, F_OK ) && !access( patched_state, F_OK ) );
+    assert( game_profile_patch_recover( exe ) == GAME_PROFILE_OK );
+    assert( game_profile_patch_restore( exe ) == GAME_PROFILE_OK && access( patched_state, F_OK ) );
+    binary_file = fopen( exe, "rb" ); assert( binary_file ); memset( binary_data, 0, sizeof(binary_data) );
+    assert( fread( binary_data, 1, sizeof(original_exe) - 1, binary_file ) == sizeof(original_exe) - 1 && !fclose( binary_file ) );
+    assert( !memcmp( binary_data, original_exe, sizeof(original_exe) - 1 ) );
+    assert( game_profile_patch_apply( exe, &binary, &binary_changed ) == GAME_PROFILE_OK && binary_changed );
+    assert( !unlink( exe ) && game_profile_patch_recover( exe ) == GAME_PROFILE_OK );
+    char binary_digest[65];
+    assert( file_digest( exe, binary_digest ) && !strcmp( binary_digest, binary.original_digest ) );
+    assert( durable_write( exe, "unsupported", 11 ) );
+    assert( game_profile_patch_apply( exe, &binary, &binary_changed ) == GAME_PROFILE_UNSUPPORTED && !binary_changed );
     assert( durable_write( settings, "# keep comment\ntitle=My game\ncontroller=auto\n", strlen( "# keep comment\ntitle=My game\ncontroller=auto\n" ) ) );
     assert( durable_write( keys, "A=0x20\n", 7 ) );
     int preserved;
     assert( game_profile_apply( settings, keys, &profile, "owner/repo", "", &preserved ) == GAME_PROFILE_OK );
-    expect( settings, "title", "My game" ); expect( settings, "controller", "keyboard" ); expect( keys, "A", "0x0d" );
+    expect( settings, "title", "新仙剑奇侠传" ); expect( settings, "controller", "keyboard" ); expect( keys, "A", "0x0d" );
     binding_version( settings, initial_version );
-    assert( game_profile_apply( settings, keys, &profile, "owner/repo", "", &preserved ) == GAME_PROFILE_OLD );
-    /* A changed value, a deleted value, an unknown setting and an unchanged default. */
     struct launcher_kv kv;
+    assert( launcher_kv_load( &kv, settings ) ); set( &kv, "title", "My custom name" ); assert( durable_write( settings, kv.text, kv.size ) );
+    /* A maintainer may rebuild a test package without changing its version. */
+    assert( game_profile_apply( settings, keys, &profile, "owner/repo", "", &preserved ) == GAME_PROFILE_OK );
+    expect( settings, "title", "My custom name" );
+    /* A changed value, a deleted value, an unknown setting and an unchanged default. */
     assert( launcher_kv_load( &kv, settings ) ); set( &kv, "window-fit", "0" ); set( &kv, "verbose", NULL ); set( &kv, "custom-option", "keep" );
     assert( durable_write( settings, kv.text, kv.size ) );
     assert( launcher_kv_load( &kv, keys ) ); set( &kv, "A", "0x41" ); assert( durable_write( keys, kv.text, kv.size ) );
@@ -74,7 +103,7 @@ int main( int argc, char **argv )
     set( &profile.settings, "sd-stat-cache", NULL ); set( &profile.settings, "vsync", "0" );
     set( &profile.keys, "A", "0x42" ); set( &profile.keys, "B", "0x08" );
     assert( game_profile_apply( settings, keys, &profile, "owner/repo", "", &preserved ) == GAME_PROFILE_OK );
-    assert( preserved == 3 );
+    assert( preserved == 4 );
     expect( settings, "window-fit", "0" ); expect( settings, "verbose", NULL ); expect( settings, "sd-stat-cache", NULL );
     expect( settings, "vsync", "0" ); expect( settings, "custom-option", "keep" );
     expect( keys, "A", "0x41" ); expect( keys, "B", "0x08" ); binding_version( settings, initial_version + 1 );
@@ -115,6 +144,6 @@ int main( int argc, char **argv )
     profile.min_api = GAME_PROFILE_API + 1;
     assert( game_profile_apply( settings, keys, &profile, "owner/repo", "", &preserved ) == GAME_PROFILE_INCOMPATIBLE );
     game_profiles_clear( catalog ); free( catalog );
-    printf( "profiles: catalog validation, filtering, binding, merge, rollback, all rename crash boundaries and symlink protection passed\n" );
+    printf( "profiles: catalog validation, native hash-pinned patch, filtering, binding, merge, rollback, all rename crash boundaries and symlink protection passed\n" );
     return 0;
 }

@@ -1014,7 +1014,7 @@ static void request_icon( struct launcher *l, int index ) { request_art( l, inde
 
 struct grid
 {
-    int card, gap_x, gap_y, caption, x0, y0, columns, rows, first;
+    int card, card_h, gap_x, gap_y, caption, x0, y0, columns, rows, first;
 };
 
 static void draw_shell( struct launcher *l, int home );
@@ -1026,7 +1026,7 @@ static void draw_cover( struct ui *ui, const struct program *p, SDL_Rect rect, i
 /* The library is one list that scrolls, so the only thing to work out is how
  * many covers stand between the margins the header keeps: as many as fit at
  * about the size the reference gives them, sharing what is left over. */
-#define GRID_CARD_TARGET 200
+#define GRID_CARD_TARGET 140
 
 static void grid_layout( const struct launcher *l, struct grid *g )
 {
@@ -1040,12 +1040,13 @@ static void grid_layout( const struct launcher *l, struct grid *g )
     if (g->columns < 1) g->columns = 1;
     g->card = (width - (g->columns - 1) * g->gap_x) / g->columns;
     if (g->card < 64) g->card = 64;
-    g->rows = (available - 24 + g->gap_y) / (g->card + g->caption + g->gap_y);
+    g->card_h = g->card * 3 / 2;
+    g->rows = (available - 24 + g->gap_y) / (g->card_h + g->caption + g->gap_y);
     if (g->rows < 1) g->rows = 1;
     rows = (l->visible_count + g->columns - 1) / g->columns;
     if (rows < 1) rows = 1;
     g->first = launcher_first_visible( l->top_row, l->selection / g->columns, rows, g->rows ) * g->columns;
-    h = g->rows * (g->card + g->caption) + (g->rows - 1) * g->gap_y;
+    h = g->rows * (g->card_h + g->caption) + (g->rows - 1) * g->gap_y;
     g->x0 = SHELL_MARGIN;
     g->y0 = UI_HEADER_HEIGHT + (available - h) / 2 + 4;
 }
@@ -1058,9 +1059,10 @@ static int grid_hit( const struct launcher *l, int x, int y )
     grid_layout( l, &g );
     if (x < g.x0 || y < g.y0) return -1;
     column = (x - g.x0) / (g.card + g.gap_x);
-    row = (y - g.y0) / (g.card + g.caption + g.gap_y);
+    row = (y - g.y0) / (g.card_h + g.caption + g.gap_y);
     if (column >= g.columns || row >= g.rows) return -1;
-    if ((x - g.x0) % (g.card + g.gap_x) >= g.card || (y - g.y0) % (g.card + g.caption + g.gap_y) >= g.card + g.caption)
+    if ((x - g.x0) % (g.card + g.gap_x) >= g.card ||
+        (y - g.y0) % (g.card_h + g.caption + g.gap_y) >= g.card_h + g.caption)
         return -1;
     hit = g.first + row * g.columns + column;
     return hit < l->visible_count ? hit : -1;
@@ -1090,17 +1092,17 @@ static void draw_card( struct launcher *l, int index, int x, int y, const struct
 {
     struct ui *ui = &l->ui;
     struct program *p = &l->programs[l->visible[index]];
-    int cx = x + g->card / 2, cy = y + g->card / 2, target = g->card * 60 / 100, dim = current ? 255 : 165;
+    int cx = x + g->card / 2, cy = y + g->card_h / 2, target = g->card * 60 / 100, dim = current ? 255 : 165;
     SDL_Color caption = current ? ui->value : ui->dim;
     int text_w;
 
-    request_art( l, l->visible[index], ART_SQUARE );
-    if (!p->square_art[0]) request_icon( l, l->visible[index] );
+    request_icon( l, l->visible[index] );
     if (current)
     {
         if (ui->glow)
         {
-            SDL_Rect rect = { x - g->card / 4, y - g->card / 4, g->card * 3 / 2, g->card * 3 / 2 };
+            SDL_Rect rect = { x - g->card / 4, y - g->card / 4,
+                              g->card * 3 / 2, g->card_h + g->card / 2 };
 
             SDL_SetTextureColorMod( ui->glow, 255, 255, 255 );
             SDL_SetTextureAlphaMod( ui->glow, 40 );
@@ -1109,25 +1111,19 @@ static void draw_card( struct launcher *l, int index, int x, int y, const struct
         /* The same light that goes round what has the focus everywhere else,
          * rather than a plate of its own: the two views frame the selection the
          * same way, and the way the rest of the launcher does. */
-        ui_animated_border( ui, x - 3, y - 3, g->card + 6, g->card + 6, 17, 3,
+        ui_animated_border( ui, x - 3, y - 3, g->card + 6, g->card_h + 6, 17, 3,
                             (SDL_Color){ 150, 160, 176, 90 }, (SDL_Color){ 244, 247, 250, 255 } );
     }
     else
     {
-        ui_rounded( ui, x + 4, y + 6, g->card, g->card, 14, (SDL_Color){ 0, 0, 0, 55 } );
-        ui_rounded( ui, x + 2, y + 3, g->card, g->card, 14, (SDL_Color){ 0, 0, 0, 70 } );
+        ui_rounded( ui, x + 4, y + 6, g->card, g->card_h, 14, (SDL_Color){ 0, 0, 0, 55 } );
+        ui_rounded( ui, x + 2, y + 3, g->card, g->card_h, 14, (SDL_Color){ 0, 0, 0, 70 } );
     }
-    ui_rounded( ui, x, y, g->card, g->card, 14, current ? ui->focus : ui->card );
+    ui_rounded( ui, x, y, g->card, g->card_h, 14, current ? ui->focus : ui->card );
     ui_fill( ui, x + 14, y, g->card - 28, 1, (SDL_Color){ 255, 255, 255, 30 } );
 
-    if (p->square_icon)
-    {
-        SDL_Rect src = {0, 0, p->square_width, p->square_height};
-        ui_rounded_texture( ui, p->square_icon, &src, (SDL_Rect){x, y, g->card, g->card}, 14,
-                            (SDL_Color){ current ? 255 : 190, current ? 255 : 190, current ? 255 : 190, 255 } );
-    }
-    else if (p->icon && p->icon_is_art)
-        draw_cover( ui, p, (SDL_Rect){x, y, g->card, g->card}, 14, current ? 255 : 190, 255 );
+    if (p->icon && p->icon_is_art)
+        draw_cover( ui, p, (SDL_Rect){x, y, g->card, g->card_h}, 14, current ? 255 : 190, 255 );
     else if (p->icon)
     {
         int side = p->icon_width > p->icon_height ? p->icon_width : p->icon_height, scale, w, h;
@@ -1157,14 +1153,14 @@ static void draw_card( struct launcher *l, int index, int x, int y, const struct
     if (p->settings.hidden)
     {
         text_w = ui_text_width( ui, ui->small, "Hidden" );
-        ui_rounded( ui, x + g->card - text_w - 26, y + g->card - 32, text_w + 16, TTF_FontHeight( ui->small ) + 4, 10,
+        ui_rounded( ui, x + g->card - text_w - 26, y + g->card_h - 32, text_w + 16, TTF_FontHeight( ui->small ) + 4, 10,
                     (SDL_Color){ 0, 0, 0, 140 } );
-        ui_text( ui, ui->small, x + g->card - text_w - 18, y + g->card - 30, "Hidden", ui->dim );
+        ui_text( ui, ui->small, x + g->card - text_w - 18, y + g->card_h - 30, "Hidden", ui->dim );
     }
 
     text_w = ui_text_width( ui, ui->small, p->title );
     if (text_w > g->card + g->gap_x - 6) text_w = g->card + g->gap_x - 6;
-    ui_text_fit( ui, ui->small, cx - text_w / 2, y + g->card + 8, g->card + g->gap_x - 6, p->title, caption, current );
+    ui_text_fit( ui, ui->small, cx - text_w / 2, y + g->card_h + 8, g->card + g->gap_x - 6, p->title, caption, current );
 }
 
 static void draw_library( struct launcher *l )
@@ -1192,7 +1188,8 @@ static void draw_library( struct launcher *l )
         int column = (i - g.first) % g.columns, row = (i - g.first) / g.columns;
 
         if (i == l->selection) continue;
-        draw_card( l, i, g.x0 + column * (g.card + g.gap_x), g.y0 + row * (g.card + g.caption + g.gap_y), &g, 0 );
+        draw_card( l, i, g.x0 + column * (g.card + g.gap_x),
+                   g.y0 + row * (g.card_h + g.caption + g.gap_y), &g, 0 );
     }
     if (l->visible_count && l->selection >= g.first && l->selection < g.first + shown)
     {
@@ -1201,7 +1198,7 @@ static void draw_library( struct launcher *l )
         /* Framed only while the games themselves have the focus: with the
          * header in focus the selection is remembered, not pointed at. */
         draw_card( l, l->selection, g.x0 + column * (g.card + g.gap_x),
-                   g.y0 + row * (g.card + g.caption + g.gap_y), &g, l->zone != ZONE_HEADER );
+                   g.y0 + row * (g.card_h + g.caption + g.gap_y), &g, l->zone != ZONE_HEADER );
     }
     /* Decode what is just off the bottom too, so scrolling on shows it at once. */
     for (i = g.first + shown; i < l->visible_count && i < g.first + 2 * shown; i++)
@@ -3333,7 +3330,7 @@ static void settings_menu( struct launcher *l )
         rows[SET_UPDATE].kind = UI_ROW_ACTION;
         rows[SET_UPDATE].adjustable = 0;
         rows[SET_UPDATE].disabled = !l->update;
-        rows[SET_UPDATE].help = "Official Autorun releases, changelog and installation. Games and settings are preserved.";
+        rows[SET_UPDATE].help = "Autorun releases, changelog and installation for this build's update channel. Games and settings are preserved.";
         snprintf( rows[SET_PROFILE_INDEX].label, sizeof(rows[0].label), "适配包管理" );
         rows[SET_PROFILE_INDEX].kind = UI_ROW_ACTION; rows[SET_PROFILE_INDEX].adjustable = 0;
         rows[SET_PROFILE_INDEX].help = "设置管理表地址、手动更新列表和开启游戏启动前自动更新。";

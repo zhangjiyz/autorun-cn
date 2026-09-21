@@ -21,6 +21,8 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include <string.h>
+
 #include "ddraw_private.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(ddraw);
@@ -58,6 +60,55 @@ static BOOL ddraw_gdi_is_front(struct ddraw *ddraw)
     return surface->surface_desc.ddsCaps.dwCaps & DDSCAPS_PRIMARYSURFACE;
 }
 
+static BOOL ddraw_nx_frontbuffer_swap_enabled(void)
+{
+    static int enabled = -1;
+    static const char key[] = "nx_frontbuffer_swap=";
+    char config[1024], *p, *value;
+    DWORD length;
+
+    if (enabled >= 0)
+        return enabled;
+
+    enabled = FALSE;
+    if (!(length = GetEnvironmentVariableA("WINE_D3D_CONFIG", config, ARRAY_SIZE(config)))
+            || length >= ARRAY_SIZE(config))
+        return enabled;
+
+    for (p = config; (p = strstr(p, key)); ++p)
+    {
+        value = p + sizeof(key) - 1;
+        if ((p == config || p[-1] == ',')
+                && value[0] == '1' && (!value[1] || value[1] == ','))
+            return enabled = TRUE;
+    }
+
+    return enabled;
+}
+
+static void ddraw_nx_mark_flip_chain_dirty(struct ddraw_surface *front)
+{
+    struct ddraw_surface *surface = front;
+
+    if (!ddraw_nx_frontbuffer_swap_enabled())
+        return;
+
+    /* Some old software renderers keep the pointer returned by Lock() and
+     * continue writing through it after Unlock().  In that case WineD3D does
+     * not see the writes and may keep using an older GPU copy when Flip() is
+     * called.  The New PAL renderer does exactly this after Bink playback.
+     * Treat the default (CPU-mappable) copy of every surface in the flip chain
+     * as authoritative before rotating it into the primary surface. */
+    do
+    {
+        surface->texture_location = DDRAW_SURFACE_LOCATION_DEFAULT;
+        wined3d_texture_add_dirty_region(surface->wined3d_texture,
+                surface->sub_resource_idx / wined3d_texture_get_level_count(surface->wined3d_texture), NULL);
+        surface = surface->complex_array[0];
+    }
+    while (surface && surface != front);
+}
+
 /* This is slow, of course. Also, in case of locks, we can't prevent other
  * applications from drawing to the screen while we've locked the frontbuffer.
  * We'd like to do this in wined3d instead, but for that to work wined3d needs
@@ -65,7 +116,7 @@ static BOOL ddraw_gdi_is_front(struct ddraw *ddraw)
 HRESULT ddraw_surface_update_frontbuffer(struct ddraw_surface *surface,
         const RECT *rect, BOOL read, unsigned int swap_interval)
 {
-    struct wined3d_texture *dst_texture, *wined3d_texture;
+    struct wined3d_texture *dst_texture, *src_texture, *wined3d_texture;
     struct ddraw *ddraw = surface->ddraw;
     HDC surface_dc, screen_dc;
     HWND dest_window = NULL;
@@ -96,6 +147,35 @@ HRESULT ddraw_surface_update_frontbuffer(struct ddraw_surface *surface,
 
     if (w <= 0 || h <= 0)
         return DD_OK;
+
+    if (!read && ddraw_nx_frontbuffer_swap_enabled() && ddraw->wined3d_swapchain)
+    {
+        static LONG updates;
+        LONG update = InterlockedIncrement(&updates);
+        BOOL report = update <= 12 || !(update % 60);
+
+        /* Some DirectDraw games stop flipping after video playback and update
+         * the primary surface through the GDI screen-DC fallback below.  That
+         * works with desktop WGL's visible front buffer, but Wine-NX presents
+         * a double-buffered EGL surface.  Keep the update on WineD3D's command
+         * stream and explicitly present it so the compositor sees each frame. */
+        if (!(dst_texture = wined3d_swapchain_get_back_buffer(ddraw->wined3d_swapchain, 0)))
+            dst_texture = wined3d_swapchain_get_front_buffer(ddraw->wined3d_swapchain);
+        src_texture = ddraw_surface_get_any_texture(surface, DDRAW_SURFACE_READ);
+
+        if (SUCCEEDED(hr = wined3d_device_context_blt(ddraw->immediate_context, dst_texture, 0, rect,
+                src_texture, surface->sub_resource_idx, rect, 0, NULL, WINED3D_TEXF_POINT)))
+        {
+            hr = wined3d_swapchain_present(ddraw->wined3d_swapchain, rect, rect, NULL,
+                    swap_interval ? swap_interval : 1, 0);
+            ddraw->flags |= DDRAW_SWAPPED;
+        }
+        if (report)
+            ERR("[NXDDRAW] update %ld surface %p caps %#lx rect %ld,%ld-%ld,%ld interval %u src %p dst %p result %#lx.\n",
+                    update, surface, surface->surface_desc.ddsCaps.dwCaps, rect->left, rect->top,
+                    rect->right, rect->bottom, swap_interval, src_texture, dst_texture, hr);
+        return hr;
+    }
 
     if (!read && TRACE_ON(fps))
     {
@@ -1419,6 +1499,8 @@ static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface1_Flip(IDirectDrawSurface *
         wined3d_mutex_unlock();
         return DDERR_NOEXCLUSIVEMODE;
     }
+
+    ddraw_nx_mark_flip_chain_dirty(dst_impl);
 
     tmp_rtv = ddraw_surface_get_rendertarget_view(dst_impl);
     texture = dst_impl->wined3d_texture;

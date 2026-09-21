@@ -6,7 +6,7 @@
 #include "launcher_ui.h"
 #include "launcher_profiles.h"
 #include "autorun_update.h"
-static char index_path[768], package_path[768], source_url[512] = "https://example.invalid/catalog.tsv";
+static char index_path[768], package_path[768], updated_package[64], source_url[512] = "https://example.invalid/catalog.tsv";
 static int table_requests, package_requests, mode, menu_step, messages;
 static char *contents( const char *path, size_t *size )
 {
@@ -27,7 +27,7 @@ enum autorun_update_result __wrap_autorun_update_file( const char *url, unsigned
         const char *root, char *path, size_t capacity, long timeout, autorun_update_progress progress, void *opaque )
 {
     (void)root; (void)progress; (void)opaque;
-    assert( strstr( url, "/profile-newpal-v3.zip" ) && timeout <= 10 ); package_requests++;
+    assert( strstr( url, updated_package ) && timeout <= 10 ); package_requests++;
     if (mode == 3) return AUTORUN_UPDATE_HASH;
     assert( autorun_file_matches( package_path, size, digest ) );
     snprintf( path, capacity, "%s", package_path ); return AUTORUN_UPDATE_OK;
@@ -82,14 +82,18 @@ static void launch( const char *root, const struct game_profile *profile, const 
 }
 int main( int argc, char **argv )
 {
-    assert( argc == 4 ); char root[768]; snprintf( root, sizeof(root), "%s/network", argv[1] ); assert( !mkdir( root, 0700 ) );
+    assert( argc == 5 );
+    unsigned base_version;
+    assert( sscanf( argv[4], "%u", &base_version ) == 1 && base_version > 0 );
+    snprintf( updated_package, sizeof(updated_package), "profile-newpal-v%u.zip", base_version + 1 );
+    char root[768]; snprintf( root, sizeof(root), "%s/network", argv[1] ); assert( !mkdir( root, 0700 ) );
     snprintf( index_path, sizeof(index_path), "%s/autorun-profiles.tsv", argv[3] );
-    snprintf( package_path, sizeof(package_path), "%s/profile-newpal-v3.zip", argv[3] );
+    snprintf( package_path, sizeof(package_path), "%s/%s", argv[3], updated_package );
     /* Index validation is separate from ZIP validation. */
     size_t length; char *valid = contents( index_path, &length );
     struct game_profile_catalog *index = calloc( 1, sizeof(*index) );
-    assert( game_profile_index_parse( valid, index ) && index->count == 2 );
-    assert( !strcmp( index->entries[0].id, "newpal" ) && index->entries[0].version == 3 );
+    assert( game_profile_index_parse( valid, index ) && index->count == 3 );
+    assert( !strcmp( index->entries[0].id, "newpal" ) && index->entries[0].version == base_version + 1 );
     char *bad = malloc( length * 2 + 1 ); assert( bad );
     strcpy( bad, valid ); strstr( bad, "https://" )[4] = 'x'; assert( !game_profile_index_parse( bad, index ) );
     strcpy( bad, valid ); bad[length - 1] = 0; assert( !game_profile_index_parse( bad, index ) );
@@ -102,13 +106,13 @@ int main( int argc, char **argv )
     launcher_profiles_settings( &ui, root );
     struct game_profile_catalog *catalog = calloc( 1, sizeof(*catalog) );
     assert( game_profiles_load( argv[2], catalog ) == GAME_PROFILE_OK );
-    launch( root, &catalog->entries[0], "Disabled", 2 ); assert( table_requests == 1 && !package_requests );
-    config( root, 1 ); launch( root, &catalog->entries[0], "Enabled", 3 ); assert( table_requests == 2 && package_requests == 1 );
-    mode = 3; launch( root, &catalog->entries[0], "HashFailure", 2 ); assert( package_requests == 2 );
+    launch( root, &catalog->entries[0], "Disabled", base_version ); assert( table_requests == 1 && !package_requests );
+    config( root, 1 ); launch( root, &catalog->entries[0], "Enabled", base_version + 1 ); assert( table_requests == 2 && package_requests == 1 );
+    mode = 3; launch( root, &catalog->entries[0], "HashFailure", base_version ); assert( package_requests == 2 );
     /* A different source cannot consume the previous source's valid cache. */
     strcpy( source_url, "https://other.invalid/table.tsv" ); config( root, 1 );
-    mode = 1; launch( root, &catalog->entries[0], "Offline", 2 ); assert( package_requests == 2 );
-    mode = 2; launch( root, &catalog->entries[0], "Cancelled", 2 ); assert( package_requests == 2 );
+    mode = 1; launch( root, &catalog->entries[0], "Offline", base_version ); assert( package_requests == 2 );
+    mode = 2; launch( root, &catalog->entries[0], "Cancelled", base_version ); assert( package_requests == 2 );
     game_profiles_clear( catalog ); free( catalog ); SDL_Quit();
     puts( "profile network: global address edit/table-only refresh, one-game auto download, disabled, hash failure, source isolation and cancellation passed" );
 }

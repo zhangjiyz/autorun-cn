@@ -19,6 +19,10 @@ spec = importlib.util.spec_from_file_location('package_profiles', ci.PROBE / 'to
 packager = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(packager)
 
+assert '标签 profile-test-001' in ci.runtime_update_note('Debug', 'profile-test-001')
+assert '可使用预发布' in ci.runtime_update_note('Debug', 'profile-test-001')
+assert '最新正式 Release' in ci.runtime_update_note('Release', '')
+
 with tempfile.TemporaryDirectory(prefix='autorun-ci-profiles-') as directory:
     release = Path(directory)
     index = release / 'autorun-profiles.tsv'
@@ -144,7 +148,9 @@ with tempfile.TemporaryDirectory(prefix='autorun-ci-package-') as directory:
     subprocess.run(['git', '-C', str(repo), '-c', 'user.name=CI fixture', '-c', 'user.email=ci@example.invalid',
                     'commit', '-q', '--allow-empty', '-m', 'fixture'], check=True)
     commit = subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip()
-    payload = {'wine-nx-runtime.nro': bytes(16) + b'NRO0\0nx-amd64-box64-1\0',
+    payload = {'wine-nx-runtime.nro': bytes(16) + b'NRO0\0nx-amd64-box64-1\0' +
+               ci.profile_index_url('example/autorun', 'profiles').encode() + b'\0' +
+               ci.profile_index_url(ci.default_repository(), '').encode() + b'\0',
                'drive_c/windows/system32/winebox64ec.dll': b'fixture',
                'drive_c/dxvk64/dxgi.dll': b'fixture', 'drive_c/dxvk64/d3d9.dll': b'fixture',
                'drive_c/vkd3d64/d3d12.dll': b'fixture'}
@@ -183,7 +189,7 @@ with tempfile.TemporaryDirectory(prefix='autorun-ci-package-') as directory:
     result = ci.verify_runtime(archive, profiles, commit, ci.profile_index_url('example/autorun', 'profiles'))
     assert result['x86_dxvk']['architecture'] == 'x86'
     with ZipFile(archive) as output:
-        assert output.read('switch/wine/profile-updates.txt') == b'index-url=https://github.com/example/autorun/releases/download/profiles/autorun-profiles.tsv\nauto-update=1\n'
+        assert output.read('switch/wine/profile-updates.txt') == b'index-url=https://cnb.cool/example/autorun/-/releases/download/profiles/autorun-profiles.tsv\nauto-update=1\nbuild-index-url=https://cnb.cool/example/autorun/-/releases/download/profiles/autorun-profiles.tsv\n'
         assert output.read('switch/wine/licenses/x86-test.txt') == b'fixture license'
         assert output.read('switch/wine/drive_c/dxvk/d3d9.dll') == image
         assert not any(name.startswith('switch/wine/profiles/profile-') and name.endswith('.zip') for name in output.namelist())
@@ -200,8 +206,8 @@ with tempfile.TemporaryDirectory(prefix='autorun-ci-package-') as directory:
     else:
         raise AssertionError('wrong bundled update source accepted')
     with ZipFile(archive) as output:
-        assert output.read('switch/wine/profile-updates.txt') == b'index-url=https://github.com/zhangjiyz/autorun-cn/releases/latest/download/autorun-profiles.tsv\nauto-update=1\n'
-    assert ci.default_repository() == 'zhangjiyz/autorun-cn'
+        assert output.read('switch/wine/profile-updates.txt') == b'index-url=https://cnb.cool/PalmMuse/autorun-cn/-/releases/latest/download/autorun-profiles.tsv\nauto-update=1\nbuild-index-url=https://cnb.cool/PalmMuse/autorun-cn/-/releases/latest/download/autorun-profiles.tsv\n'
+    assert ci.default_repository() == 'PalmMuse/autorun-cn'
     subprocess.run([sys.executable, str(tools / 'package-autorun.py'), '--no-example-games',
                     '--amd64', str(amd64), '--x86-dxvk', str(x86), '--profile-repository', ''], check=True)
     ci.verify_runtime(archive, profiles, commit, ci.profile_index_url('', ''))

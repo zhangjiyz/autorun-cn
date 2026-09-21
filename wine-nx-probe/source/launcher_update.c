@@ -34,6 +34,7 @@ struct launcher_update
 
 struct note_line { unsigned int offset, length; };
 
+#ifndef AUTORUN_DEBUG_BUILD
 static uint64_t published_time( const char *date )
 {
     static const unsigned int days_before[] = {0,31,59,90,120,151,181,212,243,273,304,334};
@@ -50,14 +51,21 @@ static uint64_t published_time( const char *date )
     days += days_before[m - 1] + d - 1 + (m > 2 && leap);
     return ((days * 24 + h) * 60 + min) * 60 + s;
 }
+#endif
 
 static int new_release( const struct launcher_update *u )
 {
+#ifdef AUTORUN_DEBUG_BUILD
+    /* A fixed test tag is deliberately replaceable. Keep manual reinstall
+     * available even when the tag itself did not change. */
+    return u->release.tag[0] != 0;
+#else
     uint64_t published = published_time( u->release.published );
     if (!strcmp( u->release.tag, AUTORUN_BUILD_TAG ) || !strcmp( u->release.tag, u->installed )) return 0;
     const uint64_t built = AUTORUN_BUILD_EPOCH;
     if (!built) return 0;
     return published > built;
+#endif
 }
 
 static int download_progress( void *opaque, unsigned long long current, unsigned long long total )
@@ -116,7 +124,7 @@ static void start_job( struct launcher_update *u, int job )
     u->current = u->total = 0;
     if (job == 1) u->ready = u->available = 0;
     u->completed = 0;
-    snprintf( u->phase, sizeof(u->phase), "%s", job == 1 ? "Checking GitHub releases" : "Downloading update" );
+    snprintf( u->phase, sizeof(u->phase), "%s", job == 1 ? "Checking CNB releases" : "Downloading update" );
     SDL_AtomicSet( &u->cancel, 0 );
     SDL_AtomicSet( &u->done, 0 );
     SDL_AtomicSet( &u->committing, 0 );
@@ -163,7 +171,9 @@ struct launcher_update *launcher_update_create( struct ui *ui, const char *root,
     u->ui = ui;
     u->restart = restart;
     strcpy( u->root, root );
+#ifndef AUTORUN_DEBUG_BUILD
     u->notify = 1;
+#endif
     start_job( u, 1 );
     return u;
 }

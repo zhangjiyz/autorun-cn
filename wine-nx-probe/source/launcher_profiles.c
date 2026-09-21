@@ -32,12 +32,13 @@ enum game_profile_result launcher_profiles_recover( const char *root, const char
 {
     char settings[768], keys[768];
     if (!profile_paths( root, exe, settings, keys )) return GAME_PROFILE_OK;
-    return game_profile_recover( settings, keys );
+    enum game_profile_result result = game_profile_patch_recover( exe );
+    return result == GAME_PROFILE_OK ? game_profile_recover( settings, keys ) : result;
 }
 
 static int config_load( const char *root, struct profile_config *config )
 {
-    char path[768]; struct launcher_kv kv;
+    char path[768], previous_default[512]; struct launcher_kv kv;
     if (snprintf( path, sizeof(path), "%s/profile-updates.txt", root ) >= (int)sizeof(path) || !launcher_kv_load( &kv, path )) return 0;
     strcpy( config->url, AUTORUN_PROFILE_INDEX_URL ); config->automatic = 1;
     if (!launcher_kv_get( &kv, "index-url", config->url, sizeof(config->url) ))
@@ -50,10 +51,33 @@ static int config_load( const char *root, struct profile_config *config )
             launcher_kv_get( &kv, "tag", tag, sizeof(tag) );
             if (!repo[0]) config->url[0] = 0;
             else if (autorun_profile_source( &valid, repo, tag ))
-                snprintf( config->url, sizeof(config->url), "https://github.com/%s/releases/%s%s/autorun-profiles.tsv",
+                snprintf( config->url, sizeof(config->url), "https://cnb.cool/%s/-/releases/%s%s/autorun-profiles.tsv",
                           repo, tag[0] ? "download/" : "latest/download", tag );
             else return 0;
         }
+    }
+    /* The online runtime installer preserves this user file. Follow a newly
+     * installed build only when its former packaged default is still selected. */
+    if (launcher_kv_get( &kv, "build-index-url", previous_default, sizeof(previous_default) ))
+    {
+        if (!strcmp( config->url, previous_default ) && strcmp( previous_default, AUTORUN_PROFILE_INDEX_URL ))
+        {
+            if (!launcher_kv_set( &kv, "index-url", AUTORUN_PROFILE_INDEX_URL ) ||
+                !launcher_kv_set( &kv, "build-index-url", AUTORUN_PROFILE_INDEX_URL ) ||
+                !launcher_kv_save( &kv, path )) return 0;
+            strcpy( config->url, AUTORUN_PROFILE_INDEX_URL );
+        }
+    }
+    else if ((!strcmp( config->url, AUTORUN_RELEASE_PROFILE_INDEX_URL ) ||
+              !strcmp( config->url, AUTORUN_LEGACY_GITHUB_PROFILE_INDEX_URL ) ||
+              !strcmp( config->url, AUTORUN_LEGACY_GITHUB_DEBUG_INDEX_URL )) &&
+             strcmp( config->url, AUTORUN_PROFILE_INDEX_URL ))
+    {
+        /* Upgrade an older Release package that has no build-index-url yet. */
+        if (!launcher_kv_set( &kv, "index-url", AUTORUN_PROFILE_INDEX_URL ) ||
+            !launcher_kv_set( &kv, "build-index-url", AUTORUN_PROFILE_INDEX_URL ) ||
+            !launcher_kv_save( &kv, path )) return 0;
+        strcpy( config->url, AUTORUN_PROFILE_INDEX_URL );
     }
     config->automatic = launcher_kv_get_int( &kv, "auto-update", 1 ) != 0;
     return !config->url[0] || autorun_https_url( config->url );
@@ -247,17 +271,20 @@ static int choose_profile( struct ui *ui, const struct game_profile_catalog *cat
 
 
 static enum game_profile_result install_selected( struct ui *ui, const char *root, const char *url,
-        const char *settings, const char *keys, const struct game_profile *selected,
+        const char *exe, const char *settings, const char *keys, const struct game_profile *selected,
         const struct game_profile_binding *binding, int automatic, Uint32 started )
 {
     int same = !strcmp( binding->id, selected->id ) && !strcmp( binding->repository, url ) && !binding->tag[0];
-    if (same && selected->version <= binding->version) return GAME_PROFILE_OLD;
+    /* Manual installs may intentionally reuse the same version while testing.
+     * The automatic path only calls us for a strictly newer index entry. */
+    if (same && selected->version < binding->version) return GAME_PROFILE_OLD;
     if (selected->min_api > GAME_PROFILE_API) return GAME_PROFILE_INCOMPATIBLE;
     char message[896];
     if (!automatic)
     {
-        snprintf( message, sizeof(message), "%s · 版本 %u\n%s\n\n%s", selected->name, selected->version, selected->description,
-            same ? "只下载此游戏适配包；保留本地修改，并备份当前配置。" : "请确认游戏版本相符。首次应用或更换来源会应用包内默认配置、按键和封面，金手指默认关闭。原配置会先备份。" );
+        snprintf( message, sizeof(message), "%s · 版本 %u\n%s\n\n%s%s", selected->name, selected->version, selected->description,
+            same ? "只下载此游戏适配包；保留本地修改，并备份当前配置。" : "请确认游戏版本相符。首次应用或更换来源会应用包内默认配置、按键和封面，金手指默认关闭。原配置会先备份。",
+            selected->has_patch ? "\n此适配会核对、备份并修改所选游戏 EXE。" : "" );
         if (!ui_confirm( ui, "应用此游戏适配包？", message, "应用" )) return GAME_PROFILE_IO;
     }
     struct game_profile_catalog *package = calloc( 1, sizeof(*package) );
@@ -265,15 +292,25 @@ static enum game_profile_result install_selected( struct ui *ui, const char *roo
     struct profile_fetch task = {.root = root, .url = url, .selected = selected, .catalog = package,
         .package = 1, .automatic = automatic, .started = started};
     enum game_profile_result result = GAME_PROFILE_IO;
-    int preserved;
+    int preserved, patched = 0;
     if (fetch( ui, &task ))
     {
-        result = game_profile_apply( settings, keys, &package->entries[0], url, "", &preserved );
+        struct game_profile *profile = &package->entries[0];
+        result = profile->has_patch ? game_profile_patch_apply( exe, &profile->patch, &patched ) : GAME_PROFILE_OK;
+        if (result == GAME_PROFILE_OK)
+        {
+            result = game_profile_apply( settings, keys, profile, url, "", &preserved );
+            if (result != GAME_PROFILE_OK && patched)
+            {
+                enum game_profile_result restored = game_profile_patch_restore( exe );
+                if (restored != GAME_PROFILE_OK) result = restored;
+            }
+        }
         if (ui && !automatic && result != GAME_PROFILE_OK) ui_message( ui, "适配包未应用", game_profile_error( result ) );
     }
     game_profiles_clear( package ); free( package );
     if (ui && !automatic && result == GAME_PROFILE_OK)
-        ui_message( ui, "适配包已应用", "已应用此游戏的适配包。配置、按键、金手指和封面已保存，可恢复上次配置。" );
+        ui_message( ui, "适配包已应用", "已应用此游戏的适配包。配置、按键、金手指、封面和声明的游戏补丁已保存，可恢复上次配置。" );
     return result;
 }
 
@@ -333,7 +370,7 @@ void launcher_profiles_open( struct ui *ui, const char *root, const char *exe, c
     char settings[768], keys[768]; struct ui_list list = {0};
     if (!profile_paths( root, exe, settings, keys )) return;
     if (launcher_settings_on_usb( exe )) { ui_message( ui, "适配包更新", "当前适配包安装支持 SD 卡上的游戏。" ); return; }
-    enum game_profile_result recovered = game_profile_recover( settings, keys );
+    enum game_profile_result recovered = launcher_profiles_recover( root, exe );
     if (recovered != GAME_PROFILE_OK) { ui_message( ui, "适配包恢复", game_profile_error( recovered ) ); return; }
     for (;;)
     {
@@ -351,7 +388,7 @@ void launcher_profiles_open( struct ui *ui, const char *root, const char *exe, c
         snprintf( rows[2].label, sizeof(rows[2].label), "恢复上次配置" );
         char backup[800]; struct stat st; snprintf( backup, sizeof(backup), "%s.profile-backup", settings );
         rows[2].disabled = stat( backup, &st ) != 0;
-        rows[2].help = "恢复上一次安装前的配置、按键、金手指、封面和绑定。";
+        rows[2].help = "恢复上一次安装前的配置、按键、金手指、封面、绑定和由适配包修改的游戏 EXE。";
         snprintf( rows[3].label, sizeof(rows[3].label), "管理表与自动更新设置" );
         rows[3].help = "全局只维护一个管理表地址，也可在主程序设置 → 系统中修改。";
         enum ui_action action = ui_list_run( ui, &list, "适配包更新", title, rows, 4, 0 );
@@ -363,7 +400,8 @@ void launcher_profiles_open( struct ui *ui, const char *root, const char *exe, c
             if (ui_confirm( ui, "恢复上次配置？", rows[2].help, "恢复" ))
             {
                 enum game_profile_result result = game_profile_restore( settings, keys );
-                ui_message( ui, "恢复上次配置", result == GAME_PROFILE_OK ? "已恢复上一次应用前的配置。" : game_profile_error( result ) );
+                if (result == GAME_PROFILE_OK) result = game_profile_patch_restore( exe );
+                ui_message( ui, "恢复上次配置", result == GAME_PROFILE_OK ? "已恢复上一次应用前的配置和游戏程序。" : game_profile_error( result ) );
             }
             continue;
         }
@@ -378,7 +416,7 @@ void launcher_profiles_open( struct ui *ui, const char *root, const char *exe, c
             else for (int i = 0; i < catalog->count; i++) if (!strcmp( catalog->entries[i].id, binding.id )) { selected = i; break; }
             if (selected >= 0)
             {
-                enum game_profile_result result = install_selected( ui, root, config.url, settings, keys, &catalog->entries[selected], &binding, 0, 0 );
+                enum game_profile_result result = install_selected( ui, root, config.url, exe, settings, keys, &catalog->entries[selected], &binding, 0, 0 );
                 if (result == GAME_PROFILE_OLD || result == GAME_PROFILE_INCOMPATIBLE) ui_message( ui, "适配包更新", game_profile_error( result ) );
             }
             else if (list.selection) ui_message( ui, "未找到适配包", "当前管理表没有此游戏，原配置保持不变。" );
@@ -393,7 +431,7 @@ int launcher_profiles_before_start( struct ui *ui, const char *root, const char 
     static char last[768]; static time_t last_check;
     char settings[768], keys[768]; struct profile_config config; struct game_profile_binding binding;
     if (launcher_settings_on_usb( exe ) || !profile_paths( root, exe, settings, keys )) return 1;
-    if (game_profile_recover( settings, keys ) != GAME_PROFILE_OK) return 0;
+    if (launcher_profiles_recover( root, exe ) != GAME_PROFILE_OK) return 0;
     if (!config_load( root, &config ) || !config.automatic || game_profile_binding_read( settings, &binding ) != GAME_PROFILE_OK ||
         !binding.id[0] || strcmp( binding.repository, config.url ) || binding.tag[0]) return 1;
     Uint32 now = SDL_GetTicks();
@@ -407,10 +445,10 @@ int launcher_profiles_before_start( struct ui *ui, const char *root, const char 
     {
         struct game_profile *p = &catalog->entries[i];
         if (strcmp( p->id, binding.id ) || p->version <= binding.version || p->min_api > GAME_PROFILE_API) continue;
-        enum game_profile_result result = install_selected( ui, root, config.url, settings, keys, p, &binding, 1, now );
+        enum game_profile_result result = install_selected( ui, root, config.url, exe, settings, keys, p, &binding, 1, now );
         fprintf( stderr, "[PROFILE] auto-update id=%s version=%u result=%d\n", p->id, p->version, result );
         break;
     }
     game_profiles_clear( catalog ); free( catalog );
-    return (!ui || ui->running) && game_profile_recover( settings, keys ) == GAME_PROFILE_OK;
+    return (!ui || ui->running) && launcher_profiles_recover( root, exe ) == GAME_PROFILE_OK;
 }

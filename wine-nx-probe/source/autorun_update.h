@@ -4,8 +4,25 @@
 #include <stddef.h>
 
 /* Shared default for runtime, profiles and release packaging. */
-#define AUTORUN_DEFAULT_REPOSITORY "zhangjiyz/autorun-cn"
-#define AUTORUN_PROFILE_INDEX_URL "https://github.com/" AUTORUN_DEFAULT_REPOSITORY "/releases/latest/download/autorun-profiles.tsv"
+#define AUTORUN_DEFAULT_REPOSITORY "PalmMuse/autorun-cn"
+#define AUTORUN_RELEASE_PROFILE_INDEX_URL "https://cnb.cool/" AUTORUN_DEFAULT_REPOSITORY "/-/releases/latest/download/autorun-profiles.tsv"
+#define AUTORUN_LEGACY_GITHUB_PROFILE_INDEX_URL "https://github.com/zhangjiyz/autorun-cn/releases/latest/download/autorun-profiles.tsv"
+#define AUTORUN_LEGACY_GITHUB_DEBUG_INDEX_URL "https://github.com/zhangjiyz/autorun-cn/releases/download/profile-debug/autorun-profiles.tsv"
+#ifndef AUTORUN_PROFILE_INDEX_URL
+#ifdef AUTORUN_DEBUG_BUILD
+#define AUTORUN_PROFILE_INDEX_URL "https://cnb.cool/" AUTORUN_DEFAULT_REPOSITORY "/-/releases/download/profile-debug/autorun-profiles.tsv"
+#else
+#define AUTORUN_PROFILE_INDEX_URL AUTORUN_RELEASE_PROFILE_INDEX_URL
+#endif
+#endif
+
+/* Debug builds follow a fixed test Release so they can install prereleases
+ * without exposing that channel to production builds. CI may override it. */
+#ifndef AUTORUN_RUNTIME_RELEASE_TAG
+#ifdef AUTORUN_DEBUG_BUILD
+#define AUTORUN_RUNTIME_RELEASE_TAG "profile-debug"
+#endif
+#endif
 
 enum autorun_update_result
 {
@@ -38,6 +55,7 @@ struct autorun_update_source
     char api[512], prefix[512], asset[128], cache[64];
     unsigned long long max_size;
     long timeout_seconds;
+    int allow_prerelease;
 };
 int autorun_https_url( const char *url );
 int autorun_file_matches( const char *path, unsigned long long size, const char *digest );

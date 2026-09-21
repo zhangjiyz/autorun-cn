@@ -145,6 +145,7 @@ static inline unsigned int nx_prof_callers( uint64_t lr, uint64_t fp, uint64_t l
 #define NX_PROF_TEB_CPU_AREA 0x1488
 #define NX_PROF_CPU_CONTEXT  4
 #define NX_PROF_I386_EBP     0xb4
+#define NX_PROF_I386_EIP     0xb8
 #define NX_PROF_I386_ESP     0xc4
 
 /* Return addresses on that x86 stack, innermost first: the two words at esp

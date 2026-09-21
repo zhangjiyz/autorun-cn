@@ -1,0 +1,9 @@
+title=新仙剑奇侠传（2001）
+d3d=wine
+wined3d-frontbuffer-swap=1
+own-controls=1
+controller=keyboard
+verbose=0
+windows=compositor
+window-fit=1
+locale=zh_CN.UTF-8

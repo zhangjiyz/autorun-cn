@@ -1,7 +1,7 @@
 /* Copyright 2026 Wine-NX contributors. LGPL-2.1-or-later.
  * Native audout backend behind the packaged winenxaudio.drv PE module.
- * Initial backend: one render client, stereo 48 kHz signed 16-bit PCM.
- * Wine's shared-mode converter handles other application formats. */
+ * Shared render backend, stereo 48 kHz signed 16-bit PCM.
+ * Application streams are converted and mixed before they reach audout. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,13 +23,13 @@
  * NX_BUFFERS * NX_CHUNK frames (40 ms) between the mixer and silence. Two of
  * them (20 ms) broke up when a frame of the game overran its slice. */
 #define NX_BUFFERS 4
+#define NX_MAX_STREAMS 8
 struct nx_audio_stream
 {
     BYTE *ring, *scratch;
-    unsigned int capacity, held, submitted, read, locked;
+    unsigned int capacity, source_capacity, held, submitted, read, locked;
     UINT64 played;
-    AudioOutBuffer buffers[NX_BUFFERS];
-    unsigned int frames[NX_BUFFERS];
+    unsigned int slot;
     float volume[2];
     HANDLE event;
     DWORD flags;
@@ -38,7 +38,11 @@ struct nx_audio_stream
     BOOL running, quit, failed;
 };
 static pthread_mutex_t audio_lock = PTHREAD_MUTEX_INITIALIZER;
-static struct nx_audio_stream *active;
+static struct nx_audio_stream *streams[NX_MAX_STREAMS];
+static AudioOutBuffer hw_buffers[NX_BUFFERS];
+static unsigned int hw_frames[NX_BUFFERS];
+static unsigned int hw_consumed[NX_BUFFERS][NX_MAX_STREAMS];
+static BOOL hw_ready, hw_started;
 static BOOL initialized;
 static struct nx_audio_stream *nx_stream(stream_handle handle) { return (void *)(UINT_PTR)handle; }
 
@@ -47,8 +51,26 @@ static NTSTATUS nx_process_attach(void *args) { (void)args; return STATUS_SUCCES
 static NTSTATUS nx_test_connect(void *args)
 {
     struct test_connect_params *p = args;
+    unsigned int i;
     pthread_mutex_lock(&audio_lock);
     if (!initialized && R_SUCCEEDED(audoutInitialize())) initialized = TRUE;
+    if (initialized && !hw_ready)
+    {
+        for (i = 0; i < NX_BUFFERS; i++)
+        {
+            hw_buffers[i].buffer = memalign(0x1000, 0x1000);
+            hw_buffers[i].buffer_size = 0x1000;
+            if (!hw_buffers[i].buffer) break;
+        }
+        if (i == NX_BUFFERS) hw_ready = TRUE;
+        else
+        {
+            while (i) free(hw_buffers[--i].buffer);
+            memset(hw_buffers, 0, sizeof(hw_buffers));
+            audoutExit();
+            initialized = FALSE;
+        }
+    }
     p->priority = initialized ? Priority_Preferred : Priority_Unavailable;
     pthread_mutex_unlock(&audio_lock);
     return STATUS_SUCCESS;
@@ -142,10 +164,8 @@ static NTSTATUS nx_get_device_period(void *args)
 static void nx_free(struct nx_audio_stream *s)
 {
     SIZE_T size = 0;
-    unsigned int i;
     if (s->scratch) NtFreeVirtualMemory(GetCurrentProcess(), (void **)&s->scratch, &size, MEM_RELEASE);
     free(s->ring);
-    for (i = 0; i < NX_BUFFERS; i++) free(s->buffers[i].buffer);
     free(s);
 }
 extern void wine_nx_runtime_trace( const char *msg ) __attribute__((weak));
@@ -167,7 +187,7 @@ static NTSTATUS nx_create_stream(void *args)
     struct create_stream_params *p = args;
     struct nx_audio_stream *s;
     SIZE_T bytes;
-    unsigned int i;
+    unsigned int slot;
     p->result = AUDCLNT_E_UNSUPPORTED_FORMAT;
     if (p->flow != eRender || !nx_format(p->fmt)) { nx_log_create(p); return STATUS_SUCCESS; }
     p->result = AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED;
@@ -176,10 +196,11 @@ static NTSTATUS nx_create_stream(void *args)
     if (p->flags & AUDCLNT_STREAMFLAGS_RATEADJUST) { nx_log_create(p); return STATUS_SUCCESS; }
     if (p->duration < 0 || p->duration > 20000000) { nx_log_create(p); return STATUS_SUCCESS; }
     pthread_mutex_lock(&audio_lock);
-    p->result = AUDCLNT_E_DEVICE_IN_USE;
-    if (active) goto done;
     p->result = AUDCLNT_E_DEVICE_INVALIDATED;
-    if (!initialized) goto done;
+    if (!initialized || !hw_ready) goto done;
+    p->result = AUDCLNT_E_DEVICE_IN_USE;
+    for (slot = 0; slot < NX_MAX_STREAMS && streams[slot]; slot++);
+    if (slot == NX_MAX_STREAMS) goto done;
     p->result = E_OUTOFMEMORY;
     if (!(s = calloc(1, sizeof(*s)))) goto done;
     s->capacity = (p->duration * NX_RATE + 9999999) / 10000000;
@@ -189,23 +210,27 @@ static NTSTATUS nx_create_stream(void *args)
     s->source_bits = p->fmt->wBitsPerSample;
     s->source_tag = nx_format_tag(p->fmt);
     s->source_frame_bytes = p->fmt->nBlockAlign;
-    s->scratch_bytes = (s->capacity * s->source_rate / NX_RATE + 2) * s->source_frame_bytes;
+    /* IAudioClient reports and accepts frames in the application's format,
+     * while capacity/held below are 48 kHz frames in the Switch ring.  Mixing
+     * those units let a 22.05 kHz client write capacity * block-align bytes
+     * into a scratch buffer sized for only capacity * 22050 / 48000 frames. */
+    s->source_capacity = (UINT64)s->capacity * s->source_rate / NX_RATE;
+    if (!s->source_capacity) s->source_capacity = 1;
+    s->scratch_bytes = s->source_capacity * s->source_frame_bytes;
     s->ring = malloc(s->capacity * 4);
     bytes = s->scratch_bytes;
-    /* Buffers exposed to a 32-bit client must reside below 4 GB. */
+    /* Buffers exposed to a 32-bit client must reside below 4 GB.  For a
+     * 64-bit NtAllocateVirtualMemory call, ZeroBits values above 32 are an
+     * allowed-address mask; 0x7fffffff therefore caps the allocation at the
+     * highest usable 32-bit user address. */
     if (!s->ring || NtAllocateVirtualMemory(GetCurrentProcess(), (void **)&s->scratch,
-                                            0xffffffff00000000ULL, &bytes,
+                                            0x7fffffff, &bytes,
                                             MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE))
     { nx_free(s); goto done; }
-    for (i = 0; i < NX_BUFFERS; i++)
-    {
-        s->buffers[i].buffer = memalign(0x1000, 0x1000);
-        s->buffers[i].buffer_size = 0x1000;
-        if (!s->buffers[i].buffer) { nx_free(s); goto done; }
-    }
     s->volume[0] = s->volume[1] = 1.0f;
     s->flags = p->flags;
-    active = s;
+    s->slot = slot;
+    streams[slot] = s;
     *p->stream = (UINT_PTR)s;
     *p->channel_count = 2;
     p->result = S_OK;
@@ -219,45 +244,99 @@ done:
 /* Gaps in playback, for Wine-NX's [PROGRESS]. */
 unsigned int wine_nx_audio_underruns;
 
-static void nx_pump(struct nx_audio_stream *s)
+static BOOL nx_any_running(const struct nx_audio_stream *except)
+{
+    unsigned int i;
+    for (i = 0; i < NX_MAX_STREAMS; i++)
+        if (streams[i] && streams[i] != except && streams[i]->running) return TRUE;
+    return FALSE;
+}
+
+static short nx_clamp_sample(int sample)
+{
+    if (sample > 32767) return 32767;
+    if (sample < -32768) return -32768;
+    return sample;
+}
+
+static void nx_pump(void)
 {
     AudioOutBuffer *released;
     u32 count;
-    unsigned int i, j;
-    if (R_FAILED(audoutGetReleasedAudioOutBuffer(&released, &count))) { s->failed = TRUE; return; }
+    unsigned int i, j, slot;
+    BOOL running = FALSE;
+    if (R_FAILED(audoutGetReleasedAudioOutBuffer(&released, &count)))
+    {
+        for (slot = 0; slot < NX_MAX_STREAMS; slot++) if (streams[slot]) streams[slot]->failed = TRUE;
+        return;
+    }
     while (count && released)
     {
-        for (i = 0; i < NX_BUFFERS; i++) if (released == &s->buffers[i])
+        for (i = 0; i < NX_BUFFERS; i++) if (released == &hw_buffers[i])
         {
-            s->held -= s->frames[i];
-            s->submitted -= s->frames[i];
-            s->played += s->frames[i];
-            s->read = (s->read + s->frames[i]) % s->capacity;
-            s->frames[i] = 0;
+            for (slot = 0; slot < NX_MAX_STREAMS; slot++) if (streams[slot] && hw_consumed[i][slot])
+            {
+                struct nx_audio_stream *s = streams[slot];
+                unsigned int frames = hw_consumed[i][slot];
+                s->held -= frames;
+                s->submitted -= frames;
+                s->played += frames;
+                s->read = (s->read + frames) % s->capacity;
+            }
+            memset(hw_consumed[i], 0, sizeof(hw_consumed[i]));
+            hw_frames[i] = 0;
             break;
         }
-        if (R_FAILED(audoutGetReleasedAudioOutBuffer(&released, &count))) { s->failed = TRUE; return; }
+        if (R_FAILED(audoutGetReleasedAudioOutBuffer(&released, &count)))
+        {
+            for (slot = 0; slot < NX_MAX_STREAMS; slot++) if (streams[slot]) streams[slot]->failed = TRUE;
+            return;
+        }
     }
     /* Nothing left with the hardware while frames are still to play: audout
      * reached the end and the listener heard the gap. Reported by [PROGRESS]. */
-    if (s->played && !s->submitted) wine_nx_audio_underruns++;
-
-    for (i = 0; i < NX_BUFFERS && s->held > s->submitted; i++) if (!s->frames[i])
+    for (slot = 0; slot < NX_MAX_STREAMS; slot++) if (streams[slot] && streams[slot]->running)
     {
-        unsigned int frames = s->held - s->submitted;
-        short *dst = s->buffers[i].buffer;
-        if (frames > NX_CHUNK) frames = NX_CHUNK;
-        for (j = 0; j < frames; j++)
+        running = TRUE;
+        if (streams[slot]->played && !streams[slot]->submitted) wine_nx_audio_underruns++;
+    }
+
+    for (i = 0; running && i < NX_BUFFERS; i++) if (!hw_frames[i])
+    {
+        unsigned int frames = 0;
+        short *dst = hw_buffers[i].buffer;
+        for (slot = 0; slot < NX_MAX_STREAMS; slot++) if (streams[slot] && streams[slot]->running)
         {
-            const short *src = (const short *)s->ring + ((s->read + s->submitted + j) % s->capacity) * 2;
-            dst[j * 2] = src[0] * s->volume[0];
-            dst[j * 2 + 1] = src[1] * s->volume[1];
+            unsigned int available = streams[slot]->held - streams[slot]->submitted;
+            if (available > frames) frames = available;
         }
-        s->buffers[i].data_size = frames * 4;
-        armDCacheFlush(s->buffers[i].buffer, s->buffers[i].data_size);
-        if (R_FAILED(audoutAppendAudioOutBuffer(&s->buffers[i]))) { s->failed = TRUE; return; }
-        s->frames[i] = frames;
-        s->submitted += frames;
+        if (!frames) break;
+        if (frames > NX_CHUNK) frames = NX_CHUNK;
+        memset(dst, 0, frames * 4);
+        for (slot = 0; slot < NX_MAX_STREAMS; slot++)
+        {
+            struct nx_audio_stream *s = streams[slot];
+            unsigned int available, take;
+            if (!s || !s->running) continue;
+            available = s->held - s->submitted;
+            take = available < frames ? available : frames;
+            for (j = 0; j < take; j++)
+            {
+                const short *src = (const short *)s->ring + ((s->read + s->submitted + j) % s->capacity) * 2;
+                dst[j * 2] = nx_clamp_sample(dst[j * 2] + src[0] * s->volume[0]);
+                dst[j * 2 + 1] = nx_clamp_sample(dst[j * 2 + 1] + src[1] * s->volume[1]);
+            }
+            hw_consumed[i][slot] = take;
+            s->submitted += take;
+        }
+        hw_buffers[i].data_size = frames * 4;
+        armDCacheFlush(hw_buffers[i].buffer, hw_buffers[i].data_size);
+        if (R_FAILED(audoutAppendAudioOutBuffer(&hw_buffers[i])))
+        {
+            for (slot = 0; slot < NX_MAX_STREAMS; slot++) if (streams[slot]) streams[slot]->failed = TRUE;
+            return;
+        }
+        hw_frames[i] = frames;
     }
 }
 static NTSTATUS nx_timer_loop(void *args)
@@ -276,7 +355,7 @@ static NTSTATUS nx_timer_loop(void *args)
         if (s->quit) { pthread_mutex_unlock(&audio_lock); break; }
         if (s->running)
         {
-            nx_pump(s);
+            nx_pump();
             if (s->event) NtSetEvent(s->event, NULL);
         }
         pthread_mutex_unlock(&audio_lock);
@@ -293,13 +372,15 @@ static NTSTATUS nx_release_stream(void *args)
     pthread_mutex_unlock(&audio_lock);
     if (p->timer_thread) { NtWaitForSingleObject(p->timer_thread, FALSE, NULL); NtClose(p->timer_thread); }
     pthread_mutex_lock(&audio_lock);
-    audoutStopAudioOut();
-    /* Closing the service guarantees DMA no longer owns any buffer. */
-    audoutExit();
-    initialized = FALSE;
-    active = NULL;
+    s->running = FALSE;
+    streams[s->slot] = NULL;
+    for (unsigned int i = 0; i < NX_BUFFERS; i++) hw_consumed[i][s->slot] = 0;
+    if (hw_started && !nx_any_running(NULL))
+    {
+        audoutStopAudioOut();
+        hw_started = FALSE;
+    }
     nx_free(s);
-    if (R_SUCCEEDED(audoutInitialize())) initialized = TRUE;
     pthread_mutex_unlock(&audio_lock);
     p->result = S_OK;
     return STATUS_SUCCESS;
@@ -313,9 +394,16 @@ static NTSTATUS nx_start(void *args)
     else if ((s->flags & AUDCLNT_STREAMFLAGS_EVENTCALLBACK) && !s->event) p->result = AUDCLNT_E_EVENTHANDLE_NOT_SET;
     else
     {
-        nx_pump(s);
-        p->result = !s->failed && R_SUCCEEDED(audoutStartAudioOut()) ? S_OK : AUDCLNT_E_DEVICE_INVALIDATED;
-        if (SUCCEEDED(p->result)) s->running = TRUE;
+        s->running = TRUE;
+        nx_pump();
+        if (s->failed) p->result = AUDCLNT_E_DEVICE_INVALIDATED;
+        else if (!hw_started && R_FAILED(audoutStartAudioOut())) p->result = AUDCLNT_E_DEVICE_INVALIDATED;
+        else
+        {
+            hw_started = TRUE;
+            p->result = S_OK;
+        }
+        if (FAILED(p->result)) s->running = FALSE;
     }
     pthread_mutex_unlock(&audio_lock);
     return STATUS_SUCCESS;
@@ -325,8 +413,17 @@ static NTSTATUS nx_stop(void *args)
     struct stop_params *p = args;
     struct nx_audio_stream *s = nx_stream(p->stream);
     pthread_mutex_lock(&audio_lock);
-    p->result = !s->running ? S_FALSE : R_SUCCEEDED(audoutStopAudioOut()) ? S_OK : AUDCLNT_E_DEVICE_INVALIDATED;
-    if (SUCCEEDED(p->result)) s->running = FALSE;
+    if (!s->running) p->result = S_FALSE;
+    else
+    {
+        s->running = FALSE;
+        if (hw_started && !nx_any_running(NULL))
+        {
+            p->result = R_SUCCEEDED(audoutStopAudioOut()) ? S_OK : AUDCLNT_E_DEVICE_INVALIDATED;
+            if (SUCCEEDED(p->result)) hw_started = FALSE;
+        }
+        else p->result = S_OK;
+    }
     pthread_mutex_unlock(&audio_lock);
     return STATUS_SUCCESS;
 }
@@ -341,12 +438,12 @@ static NTSTATUS nx_reset(void *args)
         if (s->locked) p->result = AUDCLNT_E_BUFFER_OPERATION_PENDING;
         else
         {
-            audoutExit();
-            initialized = R_SUCCEEDED(audoutInitialize());
-            s->read = s->held = s->submitted = s->frames[0] = s->frames[1] = 0;
+            unsigned int i;
+            for (i = 0; i < NX_BUFFERS; i++) hw_consumed[i][s->slot] = 0;
+            s->read = s->held = s->submitted = 0;
             s->played = 0;
-            s->failed = !initialized;
-            p->result = initialized ? S_OK : AUDCLNT_E_DEVICE_INVALIDATED;
+            s->failed = FALSE;
+            p->result = S_OK;
         }
     }
     pthread_mutex_unlock(&audio_lock);
@@ -356,10 +453,13 @@ static NTSTATUS nx_get_render_buffer(void *args)
 {
     struct get_render_buffer_params *p = args;
     struct nx_audio_stream *s = nx_stream(p->stream);
+    unsigned int out_frames = (UINT64)p->frames * NX_RATE / s->source_rate;
+    if (p->frames && !out_frames) out_frames = 1;
     pthread_mutex_lock(&audio_lock);
     if (s->locked) p->result = AUDCLNT_E_OUT_OF_ORDER;
     else if (s->failed) p->result = AUDCLNT_E_DEVICE_INVALIDATED;
-    else if (p->frames > s->capacity - s->held) p->result = AUDCLNT_E_BUFFER_TOO_LARGE;
+    else if (p->frames > s->source_capacity || out_frames > s->capacity - s->held)
+        p->result = AUDCLNT_E_BUFFER_TOO_LARGE;
     else { s->locked = p->frames; *p->data = p->frames ? s->scratch : NULL; p->result = S_OK; }
     pthread_mutex_unlock(&audio_lock);
     return STATUS_SUCCESS;
@@ -403,8 +503,8 @@ static NTSTATUS nx_release_render_buffer(void *args)
                 }
                 if (s->source_channels == 1) right = left;
             }
-            ((short *)dst)[0] = left * s->volume[0];
-            ((short *)dst)[1] = right * s->volume[1];
+            ((short *)dst)[0] = left;
+            ((short *)dst)[1] = right;
         }
         s->held += out_frames;
         s->locked = 0;
@@ -418,9 +518,10 @@ release_done:
 static NTSTATUS nx_##name(void *args) { struct name##_params *p = args; \
 struct nx_audio_stream *s = nx_stream(p->stream); (void)s; pthread_mutex_lock(&audio_lock); \
 *p->member = (value); p->result = S_OK; pthread_mutex_unlock(&audio_lock); return STATUS_SUCCESS; }
-NX_QUERY(get_buffer_size, frames, s->capacity)
+NX_QUERY(get_buffer_size, frames, s->source_capacity)
 NX_QUERY(get_latency, latency, (REFERENCE_TIME)NX_BUFFERS * NX_CHUNK * 10000000 / NX_RATE)
-NX_QUERY(get_current_padding, padding, s->held)
+NX_QUERY(get_current_padding, padding,
+         ((UINT64)s->held * s->source_rate + NX_RATE - 1) / NX_RATE)
 NX_QUERY(get_next_packet_size, frames, 0)
 NX_QUERY(get_frequency, freq, NX_RATE * 4)
 static NTSTATUS nx_get_position(void *args)

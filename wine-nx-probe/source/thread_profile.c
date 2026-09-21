@@ -236,16 +236,29 @@ static unsigned int walk_callers( const ThreadContext *ctx, uint64_t *callers )
                             read_word, callers, NX_PROF_DEPTH );
 }
 
-static unsigned int walk_x86( uint64_t teb, uint32_t *callers )
+static int saved_x86_context( uint64_t teb, uint32_t *eip, uint32_t *esp, uint32_t *ebp )
 {
     MemoryInfo info;
     uint64_t cpu, context;
 
-    if (!teb || !(cpu = read_word( teb + NX_PROF_TEB_CPU_AREA ))) return 0;
+    if (!teb || !readable( teb + NX_PROF_TEB_CPU_AREA, &info ) ||
+        !(cpu = read_word( teb + NX_PROF_TEB_CPU_AREA ))) return 0;
     context = cpu + NX_PROF_CPU_CONTEXT;
-    if (!readable( read_word32( context + NX_PROF_I386_ESP ), &info )) return 0;
-    return nx_prof_x86_callers( read_word32( context + NX_PROF_I386_ESP ), read_word32( context + NX_PROF_I386_EBP ),
-                                info.addr, info.addr + info.size, read_word32, callers, NX_PROF_DEPTH );
+    if (!readable( context + NX_PROF_I386_ESP, &info )) return 0;
+    *eip = read_word32( context + NX_PROF_I386_EIP );
+    *esp = read_word32( context + NX_PROF_I386_ESP );
+    *ebp = read_word32( context + NX_PROF_I386_EBP );
+    return 1;
+}
+
+static unsigned int walk_x86( uint64_t teb, uint32_t *callers )
+{
+    MemoryInfo info;
+    uint32_t eip, esp, ebp;
+
+    if (!saved_x86_context( teb, &eip, &esp, &ebp ) || !readable( esp, &info )) return 0;
+    return nx_prof_x86_callers( esp, ebp, info.addr, info.addr + info.size,
+                                read_word32, callers, NX_PROF_DEPTH );
 }
 
 /* Inside translated code, the x86 frame chain from the guest's EBP and ESP. */
@@ -462,18 +475,31 @@ void wine_nx_threads_report_stalled( void )
     for (i = 0; i < NX_PROF_MAX_THREADS; i++)
     {
         uint64_t callers[NX_PROF_DEPTH];
+        uint32_t x86_callers[NX_PROF_DEPTH];
         char line[NX_PROF_LINE], where[96];
         Handle handle = registry[i].handle;
-        unsigned int frames, f;
+        unsigned int frames, x86_frames = 0, f;
+        uintptr_t x86 = 0;
+        uint32_t saved_eip, saved_esp, saved_ebp;
         ThreadContext ctx;
         Result rc;
-        int tries, len;
+        int tries, len, translated = 0;
 
         if (!handle || handle == self) continue;
         if (R_FAILED( svcSetThreadActivity( handle, ThreadActivity_Paused ) )) continue;
         for (tries = 0; R_FAILED( rc = svcGetThreadContext3( &ctx, handle ) ) && tries < 4; tries++)
             svcSleepThread( 0 );
         frames = R_SUCCEEDED( rc ) ? walk_callers( &ctx, callers ) : 0;
+        if (R_SUCCEEDED( rc ) && &wine_nx_box64_pc_to_x86)
+            translated = wine_nx_box64_pc_to_x86( ctx.pc.x, &x86 );
+        if (R_SUCCEEDED( rc ) && translated)
+            x86_frames = walk_x86_frames( &ctx, x86_callers );
+        else if (R_SUCCEEDED( rc ) && saved_x86_context( registry[i].teb, &saved_eip,
+                                                        &saved_esp, &saved_ebp ))
+        {
+            x86 = saved_eip;
+            x86_frames = walk_x86( registry[i].teb, x86_callers );
+        }
         svcSetThreadActivity( handle, ThreadActivity_Runnable );
         if (R_FAILED( rc )) continue;
 
@@ -485,6 +511,16 @@ void wine_nx_threads_report_stalled( void )
         {
             name_address( callers[f], where, sizeof(where) );
             len = appendf( line, len, " < %s", where );
+        }
+        if (x86)
+        {
+            name_address( x86, where, sizeof(where) );
+            len = appendf( line, len, " | x86=%s", where );
+            for (f = 0; f < x86_frames; f++)
+            {
+                name_address( x86_callers[f], where, sizeof(where) );
+                len = appendf( line, len, " < %s", where );
+            }
         }
         wine_nx_runtime_trace( line );
         reported++;

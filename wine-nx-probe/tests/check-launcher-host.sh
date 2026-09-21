@@ -50,7 +50,7 @@ fi
 "$build/launcher_catalog"
 
 clang -std=gnu11 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
-    -I "$probe/source" $(sdl2-config --cflags) -I/opt/homebrew/include \
+    -I "$probe/source" -I "$root/include" $(sdl2-config --cflags) -I/opt/homebrew/include \
     "$probe/tests/launcher_host.c" "$probe/source/launcher.c" "$probe/source/launcher_catalog.c" "$probe/source/launcher_ui.c" \
     "$probe/source/steamgriddb.c" \
     "$probe/source/launcher_svg.c" \
@@ -121,7 +121,7 @@ grep -q "launcher returned 1 target 'sdmc:/switch/wine/drive_c/openttd/openttd.e
 echo "launcher host run: empty home, explicit add, persistence, details and start passed"
 
 # Eight played covers exercise Home's row: animated hit testing, swipe selection,
-# both ends, the header, Y Options, and the square library.
+# both ends, the header, Y Options, and the portrait library.
 cat > "$build/carousel-script.txt" <<SCRIPT
 wait 35
 key left
@@ -213,11 +213,11 @@ SCRIPT
     > "$build/scroll-out.txt" 2>&1 ) || { cat "$build/scroll-out.txt"; exit 1; }
 grep -q "120 catalog games (120 registered, 120 shown)" "$build/scroll-out.txt" || { cat "$build/scroll-out.txt"; exit 1; }
 # Four presses down put the selection on row 4, so the two rows shown are 3 and
-# 4: games 15 to 24, with the selection the sixth card. Four back up show
+# 4: games 21 to 34, with the selection the eighth card. Four back up show
 # the first two rows again. A screen that never moved means the buttons were
 # never read, which is what a queue full of the worker's events causes.
 python3 "$probe/tests/launcher_shot.py" check "$shots/scroll-top.png" 0 0
-python3 "$probe/tests/launcher_shot.py" check "$shots/scroll-down.png" 15 5
+python3 "$probe/tests/launcher_shot.py" check "$shots/scroll-down.png" 21 7
 python3 "$probe/tests/launcher_shot.py" check "$shots/scroll-back.png" 0 0
 echo "launcher host run: a library past one screenful scrolls and keeps every cover"
 
@@ -239,5 +239,5 @@ shot $shots/busy-scrolled.png
 SCRIPT
 ( cd "$build/big" && SDL_VIDEODRIVER=dummy "$build/launcher_host" "$font" "$build/busy-script.txt" \
     > "$build/busy-out.txt" 2>&1 ) || { cat "$build/busy-out.txt"; exit 1; }
-python3 "$probe/tests/launcher_shot.py" check "$shots/busy-scrolled.png" 15 5 3
+python3 "$probe/tests/launcher_shot.py" check "$shots/busy-scrolled.png" 21 7 3
 echo "launcher host run: buttons are read while the covers are still being decoded"

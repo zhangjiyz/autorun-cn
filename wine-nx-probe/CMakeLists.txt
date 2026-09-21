@@ -788,6 +788,15 @@ if(WINE_NX_AMD64)
 endif()
 
 target_compile_definitions(wine-nx-runtime PRIVATE ${WINE_SWITCH_NTDLL_DEFS})
+set(AUTORUN_PROFILE_INDEX_URL_OVERRIDE "DEFAULT" CACHE STRING "Profile index URL embedded in the launcher; DEFAULT selects its build-type default")
+set(AUTORUN_RUNTIME_RELEASE_TAG_OVERRIDE "DEFAULT" CACHE STRING "Main-program Release tag embedded in the launcher; DEFAULT selects the build-type default")
+target_compile_definitions(wine-nx-runtime PRIVATE $<$<CONFIG:Debug>:AUTORUN_DEBUG_BUILD>)
+if(NOT AUTORUN_PROFILE_INDEX_URL_OVERRIDE STREQUAL "DEFAULT")
+    target_compile_definitions(wine-nx-runtime PRIVATE AUTORUN_PROFILE_INDEX_URL=\"${AUTORUN_PROFILE_INDEX_URL_OVERRIDE}\")
+endif()
+if(NOT AUTORUN_RUNTIME_RELEASE_TAG_OVERRIDE STREQUAL "DEFAULT" AND NOT AUTORUN_RUNTIME_RELEASE_TAG_OVERRIDE STREQUAL "")
+    target_compile_definitions(wine-nx-runtime PRIVATE AUTORUN_RUNTIME_RELEASE_TAG=\"${AUTORUN_RUNTIME_RELEASE_TAG_OVERRIDE}\")
+endif()
 
 target_compile_options(wine-nx-runtime PRIVATE
     -std=gnu99
@@ -1035,9 +1044,14 @@ if(NACPTOOL AND ELF2NRO)
 
     add_custom_target(wine-nx-ntdll-file-smoke-nro ALL DEPENDS "${NTDLL_FILE_SMOKE_NRO_FILE}")
 
+    # Keep the first three components aligned with upstream Autorun's NACP version.
+    set(AUTORUN_UPSTREAM_VERSION "0.0.1")
+    set(AUTORUN_CN_REVISION "1")
     add_custom_command(
         OUTPUT "${RUNTIME_NACP_FILE}"
-        COMMAND "${NACPTOOL}" --create "Autorun" "ticoverse.com" "0.0.1" "${RUNTIME_NACP_FILE}"
+        COMMAND "${NACPTOOL}" --create "Autorun" "ticoverse.com"
+                "${AUTORUN_UPSTREAM_VERSION}.${AUTORUN_CN_REVISION}" "${RUNTIME_NACP_FILE}"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt"
         VERBATIM
     )
 

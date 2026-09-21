@@ -13,13 +13,20 @@
 
 #include "autorun_update.h"
 
-#define RELEASE_API "https://api.github.com/repos/" AUTORUN_DEFAULT_REPOSITORY "/releases/latest"
-#define DOWNLOAD_PREFIX "https://github.com/" AUTORUN_DEFAULT_REPOSITORY "/releases/download/"
+#ifdef AUTORUN_RUNTIME_RELEASE_TAG
+#define RELEASE_API "https://cnb.cool/" AUTORUN_DEFAULT_REPOSITORY "/-/releases/tags/" AUTORUN_RUNTIME_RELEASE_TAG
+#define RUNTIME_ALLOW_PRERELEASE 1
+#else
+#define RELEASE_API "https://cnb.cool/" AUTORUN_DEFAULT_REPOSITORY "/-/releases/latest"
+#define RUNTIME_ALLOW_PRERELEASE 0
+#endif
+#define DOWNLOAD_PREFIX "https://cnb.cool/" AUTORUN_DEFAULT_REPOSITORY "/-/releases/download/"
 #define METADATA_MAX (1024u * 1024u)
 #define ARCHIVE_MAX (512u * 1024u * 1024u)
 
 static const struct autorun_update_source runtime_source = {
-    RELEASE_API, DOWNLOAD_PREFIX, "autorun.zip", "release.zip", ARCHIVE_MAX, 0
+    RELEASE_API, DOWNLOAD_PREFIX, "autorun.zip", "release.zip", ARCHIVE_MAX, 0,
+    RUNTIME_ALLOW_PRERELEASE
 };
 
 static int source_component( const char *text, size_t len )
@@ -39,12 +46,13 @@ int autorun_profile_source( struct autorun_update_source *source, const char *re
         !source_component( slash + 1, strlen( slash + 1 ) ) ||
         (tag && tag[0] && !source_component( tag, strlen( tag ) ))) return 0;
     memset( source, 0, sizeof(*source) );
-    snprintf( source->api, sizeof(source->api), "https://api.github.com/repos/%s/releases/%s%s",
+    snprintf( source->api, sizeof(source->api), "https://cnb.cool/%s/-/releases/%s%s",
               repository, tag && tag[0] ? "tags/" : "latest", tag ? tag : "" );
-    snprintf( source->prefix, sizeof(source->prefix), "https://github.com/%s/releases/download/", repository );
+    snprintf( source->prefix, sizeof(source->prefix), "https://cnb.cool/%s/-/releases/download/", repository );
     strcpy( source->asset, "autorun-profiles.zip" );
     strcpy( source->cache, "profiles.zip" );
     source->max_size = 16 * 1024 * 1024;
+    source->allow_prerelease = tag && tag[0];
     return 1;
 }
 
@@ -357,15 +365,15 @@ static int json_uint( struct parser *p, unsigned long long *value )
     return 1;
 }
 
-static int digest( const char *text, char out[65] )
+static int digest_value( const char *text, char out[65] )
 {
     size_t i;
 
-    if (strncmp( text, "sha256:", 7 ) || strlen( text + 7 ) != 64) return 0;
+    if (strlen( text ) != 64) return 0;
     for (i = 0; i < 64; i++)
     {
-        if (!isxdigit( (unsigned char)text[i + 7] )) return 0;
-        out[i] = tolower( (unsigned char)text[i + 7] );
+        if (!isxdigit( (unsigned char)text[i] )) return 0;
+        out[i] = tolower( (unsigned char)text[i] );
     }
     out[64] = 0;
     return 1;
@@ -373,7 +381,7 @@ static int digest( const char *text, char out[65] )
 
 static int parse_asset( struct parser *p, struct asset *asset )
 {
-    char key[64], hash[96];
+    char key[64], algorithm[16];
 
     memset( asset, 0, sizeof(*asset) );
     if (!consume( p, '{' )) return 0;
@@ -385,14 +393,8 @@ static int parse_asset( struct parser *p, struct asset *asset )
         if (!strcmp( key, "name" )) { if ((asset->fields & 1) || !json_string( p, asset->name, sizeof(asset->name) )) return 0; asset->fields |= 1; }
         else if (!strcmp( key, "browser_download_url" )) { if ((asset->fields & 2) || !json_string( p, asset->url, sizeof(asset->url) )) return 0; asset->fields |= 2; }
         else if (!strcmp( key, "size" )) { if ((asset->fields & 4) || !json_uint( p, &asset->size )) return 0; asset->fields |= 4; }
-        else if (!strcmp( key, "digest" ))
-        {
-            if (asset->fields & 8) return 0;
-            whitespace( p );
-            if (p->end - p->p >= 4 && !memcmp( p->p, "null", 4 )) p->p += 4;
-            else if (!json_string( p, hash, sizeof(hash) ) || !digest( hash, asset->digest )) return 0;
-            asset->fields |= 8;
-        }
+        else if (!strcmp( key, "hash_algo" )) { if ((asset->fields & 8) || !json_string( p, algorithm, sizeof(algorithm) ) || strcmp( algorithm, "sha256" )) return 0; asset->fields |= 8; }
+        else if (!strcmp( key, "hash_value" )) { if ((asset->fields & 16) || !json_string( p, asset->digest, sizeof(asset->digest) ) || !digest_value( asset->digest, asset->digest )) return 0; asset->fields |= 16; }
         else if (!skip_value( p )) return 0;
         whitespace( p );
         if (p->p < p->end && *p->p == '}') { p->p++; return 1; }
@@ -431,7 +433,7 @@ static int parse_assets( struct parser *p, const char *tag, struct asset *chosen
     for (;;)
     {
         if (!parse_asset( p, &asset )) return 0;
-        if (asset.fields == 15 && asset.digest[0] && asset.size && asset.size <= source->max_size && zip_name( asset.name ) && official_url( source, asset.url ) &&
+        if (asset.fields == 31 && asset.digest[0] && asset.size && asset.size <= source->max_size && zip_name( asset.name ) && official_url( source, asset.url ) &&
             (source->asset[0] ? !strcmp( source->asset, asset.name ) : strcasecmp( asset.name, "autorun-profiles.zip" )))
         {
             zip_count++;
@@ -505,7 +507,8 @@ static int parse_release( const unsigned char *data, size_t size, struct autorun
         if (p.p == p.end || *p.p++ != ',') return 0;
     }
     whitespace( &p );
-    if (p.p != p.end || fields != 127 || draft || prerelease || !release->tag[0] || !asset.digest[0]) return 0;
+    if (p.p != p.end || fields != 127 || draft || (prerelease && !source->allow_prerelease) ||
+        !release->tag[0] || !asset.digest[0]) return 0;
     if (!release->name[0]) snprintf( release->name, sizeof(release->name), "%s", release->tag );
     memcpy( release->url, asset.url, sizeof(release->url) );
     memcpy( release->digest, asset.digest, sizeof(release->digest) );
@@ -524,8 +527,7 @@ static enum autorun_update_result request_metadata( const struct autorun_update_
 
     memset( body, 0, sizeof(*body) );
     if (curl_global_init( CURL_GLOBAL_DEFAULT ) != CURLE_OK || !(curl = curl_easy_init())) return AUTORUN_UPDATE_NETWORK;
-    headers = curl_slist_append( headers, "Accept: application/vnd.github+json" );
-    headers = curl_slist_append( headers, "X-GitHub-Api-Version: 2022-11-28" );
+    headers = curl_slist_append( headers, "Accept: application/vnd.cnb.api+json" );
     if (!headers || !set_https_options( curl ) ||
         curl_easy_setopt( curl, CURLOPT_TIMEOUT, source->timeout_seconds ? source->timeout_seconds : 45L ) ||
         curl_easy_setopt( curl, CURLOPT_URL, source->api ) ||
@@ -736,9 +738,9 @@ const char *autorun_update_error( enum autorun_update_result result )
     {
     case AUTORUN_UPDATE_OK: return "The update is ready.";
     case AUTORUN_UPDATE_CANCELLED: return "The update was cancelled.";
-    case AUTORUN_UPDATE_NETWORK: return "Could not download the update from GitHub.";
-    case AUTORUN_UPDATE_NOT_FOUND: return "No official Autorun update was found.";
-    case AUTORUN_UPDATE_INVALID: return "GitHub returned an invalid Autorun release.";
+    case AUTORUN_UPDATE_NETWORK: return "Could not download the update from CNB.";
+    case AUTORUN_UPDATE_NOT_FOUND: return "No Autorun update was found in this release channel.";
+    case AUTORUN_UPDATE_INVALID: return "CNB returned an invalid Autorun release.";
     case AUTORUN_UPDATE_IO: return "The update could not be written to the SD card.";
     case AUTORUN_UPDATE_HASH: return "The update failed SHA-256 verification.";
     }

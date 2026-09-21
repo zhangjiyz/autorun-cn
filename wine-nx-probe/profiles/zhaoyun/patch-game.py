@@ -3,14 +3,18 @@
 
 import argparse
 import hashlib
+import json
 import os
 from pathlib import Path
 
-ORIGINAL_SHA256 = "cf70f9cfd658d871bb6b8429bf6a997c38a182859dfdf6bda9bb2d6a2341dc1f"
-PATCHED_SHA256 = "9cad6f4bfced271c0cc5c55607f9daa0c304b6c327a1b3f95c639152dce7ec83"
-OFFSET = 0x4D320
-OLD = bytes.fromhex("a128fe6600")
-NEW = bytes.fromhex("b800000000")
+definition = json.loads(Path(__file__).with_name("binary-patch.json").read_text())
+if set(definition) != {"schema", "original_sha256", "patched_sha256", "offset", "old", "new"} or definition["schema"] != 1:
+    raise RuntimeError("invalid binary-patch.json")
+ORIGINAL_SHA256 = definition["original_sha256"]
+PATCHED_SHA256 = definition["patched_sha256"]
+OFFSET = definition["offset"]
+OLD = bytes.fromhex(definition["old"])
+NEW = bytes.fromhex(definition["new"])
 
 
 def digest(data: bytes) -> str:

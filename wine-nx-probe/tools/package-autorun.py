@@ -25,7 +25,7 @@ default_amd64 = probe / 'build-switch-amd64/wine-nx-amd64-box64-mesa-dxvk-vkd3d.
 parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
 parser.add_argument('--amd64', type=Path,
                     default=Path(os.environ.get('WINE_NX_AMD64_PACKAGE', default_amd64)))
-parser.add_argument('--profile-repository', default=default_repository, help='Profile GitHub source, owner/repo (empty: bundled catalog only)')
+parser.add_argument('--profile-repository', default=default_repository, help='Profile CNB source, group/repo (empty: bundled catalog only)')
 parser.add_argument('--profile-release-tag', default='', help='Optional dedicated profile Release tag (empty: latest)')
 parser.add_argument('--no-example-games', action='store_true',
                     help='Package the dual-architecture runtime without the old test-game inputs')
@@ -95,7 +95,7 @@ if args.no_example_games:
     shutil.copy2(probe.parent / 'README.zh-CN.md', generic_stage / 'README.zh-CN.md')
     zhaoyun_profile = generic_stage / 'profiles/zhaoyun'
     zhaoyun_profile.mkdir(parents=True, exist_ok=True)
-    for name in ('Game.keys.txt', 'README.zh-CN.md', 'patch-game.py'):
+    for name in ('Game.keys.txt', 'README.zh-CN.md', 'patch-game.py', 'binary-patch.json'):
         shutil.copy2(probe / 'profiles/zhaoyun' / name, zhaoyun_profile / name)
     profile_dir = generic_stage / 'profiles'
     subprocess.run([sys.executable, str(tools / 'package-profiles.py'), '--output-dir', str(profile_dir),
@@ -113,14 +113,15 @@ if args.no_example_games:
     profile_packager = importlib.util.module_from_spec(profile_spec)
     profile_spec.loader.exec_module(profile_packager)
     index_url = profile_packager.release_base(args.profile_repository, args.profile_release_tag) + 'autorun-profiles.tsv' if args.profile_repository else ''
-    (generic_stage / 'profile-updates.txt').write_text(f'index-url={index_url}\nauto-update=1\n', encoding='utf-8')
+    (generic_stage / 'profile-updates.txt').write_text(
+        f'index-url={index_url}\nauto-update=1\nbuild-index-url={index_url}\n', encoding='utf-8')
     (generic_stage / 'INSTALL.zh-CN.txt').write_text(
         '将压缩包内的 switch 文件夹复制到 SD 卡根目录。\n'
         '自行把已安装的 Windows 游戏复制到 switch/wine/drive_c，'
         '在 Autorun 中按 + 添加游戏并选择 EXE。\n'
         '启动 Switch 游戏时按住 R 打开自制程序菜单，进入 wine 文件夹，'
         '选择 Autorun（wine-nx-runtime.nro），以获得完整内存。\n'
-        '本包不附带游戏；主程序在线更新使用 zhangjiyz/autorun-cn 的 autorun.zip。\n', encoding='utf-8')
+        '本包不附带游戏；主程序在线更新使用 CNB PalmMuse/autorun-cn 的 autorun.zip。\n', encoding='utf-8')
     if args.x86_dxvk_overlay:
         with ZipFile(args.x86_dxvk_overlay) as overlay:
             assert overlay.testzip() is None, f'{args.x86_dxvk_overlay} is damaged'

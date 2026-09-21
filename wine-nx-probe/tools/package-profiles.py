@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the maintained catalog and build the GitHub Release profile asset."""
+"""Validate the maintained catalog and build the CNB Release profile asset."""
 import argparse
 import hashlib
 import json
@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 from zipfile import ZipFile, ZipInfo, ZIP_DEFLATED
 
 PROBE = Path(__file__).resolve().parents[1]
-SETTINGS = set('d3d d3d9 own-controls controller verbose profile window-fit sdl-audio sd-stat-cache '
+SETTINGS = set('title d3d d3d9 own-controls controller verbose profile window-fit sdl-audio sd-stat-cache locale wined3d-renderer wined3d-frontbuffer-swap '
                'aspect-fit touch-coordinates left-stick-run left-stick-eight-way left-stick-aim left-stick-move '
                'windows dxvk-version vkd3d-version dxvk-hud frame-limit vsync'.split())
 KEYS = set('LSTICK RSTICK DPAD TOUCH UP DOWN LEFT RIGHT LUP LDOWN LLEFT LRIGHT RUP RDOWN RLEFT RRIGHT '
@@ -135,10 +135,35 @@ def cover(root, relative):
     return data
 
 
+def binary_patch(root, relative):
+    patch = json.loads(resource(root, relative).decode('utf-8'), object_pairs_hook=unique_object)
+    required = {'schema', 'original_sha256', 'patched_sha256', 'offset', 'old', 'new'}
+    if set(patch) != required or type(patch['schema']) is not int or patch['schema'] != 1:
+        raise ValueError('binary patch schema must be 1 with the exact required fields')
+    for key in ('original_sha256', 'patched_sha256'):
+        if not isinstance(patch[key], str) or not re.fullmatch('[0-9a-f]{64}', patch[key]):
+            raise ValueError(f'invalid binary patch {key}')
+    if patch['original_sha256'] == patch['patched_sha256']:
+        raise ValueError('binary patch digests must differ')
+    if type(patch['offset']) is not int or not 0 <= patch['offset'] <= 0x7fffffffffffffff:
+        raise ValueError('invalid binary patch offset')
+    for key in ('old', 'new'):
+        if not isinstance(patch[key], str) or not re.fullmatch('[0-9a-f]+', patch[key]) or len(patch[key]) % 2:
+            raise ValueError(f'invalid binary patch {key} bytes')
+    if len(patch['old']) != len(patch['new']) or not 2 <= len(patch['old']) <= 128 or patch['old'] == patch['new']:
+        raise ValueError('binary patch must replace 1 to 64 bytes with a different equal-length value')
+    return ('autorun-binary-patch-v1\n'
+            f'original-sha256={patch["original_sha256"]}\n'
+            f'patched-sha256={patch["patched_sha256"]}\n'
+            f'offset={patch["offset"]}\n'
+            f'old={patch["old"]}\n'
+            f'new={patch["new"]}\n').encode('ascii')
+
+
 def build(catalog_path, output, selected=None):
     catalog = json.loads(catalog_path.read_text(encoding='utf-8'), object_pairs_hook=unique_object)
-    if set(catalog) != {'schema', 'profiles'} or type(catalog['schema']) is not int or catalog['schema'] not in (1, 2):
-        raise ValueError('catalog schema must be 1 or 2')
+    if set(catalog) != {'schema', 'profiles'} or type(catalog['schema']) is not int or catalog['schema'] not in (1, 2, 3):
+        raise ValueError('catalog schema must be 1, 2 or 3')
     entries = catalog['profiles']
     if not isinstance(entries, list) or not 1 <= len(entries) <= 128:
         raise ValueError('catalog must contain 1 to 128 profiles')
@@ -146,12 +171,14 @@ def build(catalog_path, output, selected=None):
         entries = [entry for entry in entries if entry.get('id') == selected]
         if len(entries) != 1:
             raise ValueError('profile selection must identify one entry')
-    v2 = catalog['schema'] == 2
+    v2 = catalog['schema'] >= 2
+    v3 = catalog['schema'] >= 3
     lines = [f'autorun-profiles-v{catalog["schema"]}\n']
     files, ids = {}, set()
     for entry in entries:
         required = {'id', 'name', 'version', 'min_api', 'keywords', 'description', 'settings', 'keys'}
-        if not required <= set(entry) or set(entry) - required - ({'cheats', 'cover', 'url'} if v2 else set()):
+        optional = ({'cheats', 'cover', 'url'} if v2 else set()) | ({'binary_patch'} if v3 else set())
+        if not required <= set(entry) or set(entry) - required - optional:
             raise ValueError('unexpected or missing profile fields')
         ident = field(entry['id'], 64, 'id')
         if not re.fullmatch('[a-z0-9-]+', ident) or ident in ids:
@@ -170,11 +197,17 @@ def build(catalog_path, output, selected=None):
         columns = [ident, name, str(entry['version']), str(entry['min_api']), keywords, description]
         if v2:
             columns += [str(int('cheats' in entry)), str(int('cover' in entry))]
+        if v3:
+            columns += [str(int('binary_patch' in entry))]
+            if 'binary_patch' in entry and entry['min_api'] < 3:
+                raise ValueError('binary patches require min_api >= 3')
         lines.append('\t'.join(columns) + '\n')
         if 'cheats' in entry:
             files[f'{ident}/cheats.txt'] = cheats(catalog_path.parent, entry['cheats'])
         if 'cover' in entry:
             files[f'{ident}/cover.png'] = cover(catalog_path.parent, entry['cover'])
+        if 'binary_patch' in entry:
+            files[f'{ident}/patch.txt'] = binary_patch(catalog_path.parent, entry['binary_patch'])
         for kind in ('settings', 'keys'):
             files[f'{ident}/{kind}.txt'] = defaults(catalog_path.parent, entry[kind], kind == 'keys')
     if sum(len(data) for name, data in files.items() if name.endswith('/cover.png')) > 16 * 1024 * 1024:
@@ -212,7 +245,7 @@ def release_base(repository, tag=''):
         raise ValueError('repository must be owner/repo')
     if tag and not re.fullmatch(component, tag):
         raise ValueError('invalid release tag')
-    return f'https://github.com/{repository}/releases/' + (f'download/{tag}/' if tag else 'latest/download/')
+    return f'https://cnb.cool/{repository}/-/releases/' + (f'download/{tag}/' if tag else 'latest/download/')
 
 
 def build_release(catalog_path, directory, repository=None, tag=''):

@@ -6,7 +6,7 @@
 
 主程序 **设置 → 系统 → 适配包管理**：
 
-- **管理表更新地址**：输入完整 HTTPS 文件地址，也可指向自己的 GitHub Release 或静态文件；留空使用安装包内置表。
+- **管理表更新地址**：输入完整 HTTPS 文件地址，也可指向自己的 CNB Release 或静态文件；留空使用安装包内置表。
 - **立即更新管理表**：只获取名字、版本、包下载地址和校验值，不下载任何游戏适配包。
 - **启动游戏前自动更新适配包**：默认开启，仅检查已经手动绑定的游戏。可关闭；检查或下载时按 B 跳过更新继续启动。
 
@@ -31,7 +31,7 @@
 | --- | --- |
 | `id` | 稳定游戏/版本 ID，仅小写字母、数字、横线，不要复用或改名 |
 | `name` | 列表显示名称，建议含适用游戏版本 |
-| `version` | 正整数包版本；改动配置、按键、金手指或封面后递增 |
+| `version` | 正整数包版本；测试打包保持不变，仅维护者明确要求时手动递增 |
 | `min_api` | 包能力级别，目前为 2，对应金手指及封面框架 |
 | `keywords` | 中文、繁体、英文、拼音等筛选别名 |
 | `description` | 适用版本、前提和更新说明 |
@@ -41,9 +41,11 @@
 | `cover` | 可选，PNG 封面相对路径 |
 | `url` | 可选，此游戏 ZIP 的完整 HTTPS 下载地址；未填则自动使用指定仓库/标签 |
 
-默认表中有 NewPAL 2.17.102.0、赵云传 2002ls。赵云传仍需先手动运行已有 `patch-game.py`；下载器不修改或执行 EXE、DLL、脚本。包不包含游戏本体和存档。
+默认表中有 NewPAL 2.17.102.0、赵云传 2002ls。赵云传适配包使用 API 3 的声明式二进制补丁：主程序只修改用户选中的、SHA-256 完全匹配的 `Game.exe`，先保存原文件并支持恢复。它不执行包内脚本，也不包含游戏本体和存档。`patch-game.py` 仅作为电脑端手动工具保留。
 
 同一游戏的不同版本配置不兼容时使用不同 ID。首次应用或更换管理表会应用包列出的默认值；同来源、同 ID 更新使用旧默认值/本地值/新默认值的三方合并，保留玩家修改和删除的配置。金手指迁移规则见下文。
+
+适配配置可以包含 `title`，首次应用后作为游戏库显示名；玩家随后手动修改的名称在同一适配包更新或同版本重装时会保留。
 
 ## 生成与发布
 
@@ -61,18 +63,18 @@ python3 wine-nx-probe/tools/package-profiles.py --output-dir dist/profiles
 
 ```text
 autorun-profiles.tsv
-profile-newpal-v2.zip
-profile-zhaoyun-2002ls-v2.zip
+profile-newpal-v1.zip
+profile-zhaoyun-2002ls-v1.zip
 ```
 
 每个 ZIP 内只有对应游戏的 manifest、settings、keys，以及可选的 cheats 和 cover。每个包独立版本、独立 SHA-256，不再发布聚合 `autorun-profiles.zip`。旧聚合包只保留读取兼容与回归测试，新的在线列表不会下载它。
 
 生成的管理表包含 ID、显示名、版本、最低 API、关键词、说明、下载 URL、SHA-256、字节数。最多 128 个游戏；单 ZIP 最大 16 MiB，单配置/金手指定义小于 8 KiB，封面最大 2 MiB 和 2048×2048 像素。包下载后依次检查长度、SHA-256、ZIP 内容和条目 ID/版本/API；包与表不符不安装。
 
-主程序仍读取 `zhangjiyz/autorun-cn` 最新正式 Release 的 `autorun.zip`。适配表默认地址：
+主程序读取 CNB `PalmMuse/autorun-cn` 最新正式 Release 的 `autorun.zip`。适配表默认地址：
 
 ```text
-https://github.com/zhangjiyz/autorun-cn/releases/latest/download/autorun-profiles.tsv
+https://cnb.cool/PalmMuse/autorun-cn/-/releases/latest/download/autorun-profiles.tsv
 ```
 
 发布同一个 Release 时上传 `autorun.zip`（如更新主程序）、`autorun-profiles.tsv` 和表中所有游戏 ZIP。默认使用 latest 下载路径，所以每个最新 Release 都应包含表及引用的各游戏包；即使只更新一个游戏，也要保持其他条目的下载地址可访问。可用条目 `url` 指向保留的旧 Release 附件，避免重复上传未变的包。
@@ -81,23 +83,23 @@ https://github.com/zhangjiyz/autorun-cn/releases/latest/download/autorun-profile
 
 ```sh
 python3 wine-nx-probe/tools/package-profiles.py --output-dir dist/profiles \
-  --repository zhangjiyz/autorun-cn --release-tag profiles
+  --repository PalmMuse/autorun-cn --release-tag profiles
 ```
 
-此时把主程序内管理表地址设为 `https://github.com/zhangjiyz/autorun-cn/releases/download/profiles/autorun-profiles.tsv`。先上传所有游戏包，最后更新表；不得改变已有版本号包的内容。SHA-256 和大小由本地 ZIP 自动计算，不依赖 GitHub 元数据。
+此时把主程序内管理表地址设为 `https://cnb.cool/PalmMuse/autorun-cn/-/releases/download/profiles/autorun-profiles.tsv`。先上传所有游戏包，最后更新表；不得改变已有版本号包的内容。SHA-256 和大小由本地 ZIP 自动计算，不依赖 CNB 元数据。
 
 ## 默认地址与配置迁移
 
 主程序默认地址在 `source/autorun_update.h` 的 `AUTORUN_PROFILE_INDEX_URL` 中，可在源码修改；运行时设置优先。`switch/wine/profile-updates.txt`：
 
 ```ini
-index-url=https://github.com/zhangjiyz/autorun-cn/releases/latest/download/autorun-profiles.tsv
+index-url=https://cnb.cool/PalmMuse/autorun-cn/-/releases/latest/download/autorun-profiles.tsv
 auto-update=1
 ```
 
 `index-url=` 为空表示离线；`auto-update=0` 关闭自动更新。完整安装包只内置同一管理表，不附带所有游戏 ZIP。若需离线首次应用，把选定游戏的独立 ZIP 手动放入 `switch/wine/profiles/`，文件名保持不变。`package-autorun.py --profile-repository` 与 `--profile-release-tag` 会生成对应表地址和包地址。
 
-v21-v23 的 `repository/tag` 设置会被读为对应仓库的管理表地址，明确的空仓库继续表示离线。旧在线绑定记录的是 owner/repo，新绑定记录完整表 URL：旧在线绑定需手动重新选择一次；自动检查不会静默迁移来源。旧离线绑定可继续匹配离线列表。
+v21-v23 的 `repository/tag` 设置会被读为对应 CNB 仓库的管理表地址，明确的空仓库继续表示离线。原 GitHub 默认管理表地址会自动迁移到当前 CNB 构建地址，用户填写的自定义地址会保留。旧在线绑定记录的是 owner/repo，新绑定记录完整表 URL：旧在线绑定需手动重新选择一次；自动检查不会静默迁移来源。旧离线绑定可继续匹配离线列表。
 
 更换管理表地址后，已有游戏同样需要手动重新选择一次才迁移。恢复备份可能恢复旧来源，之后仍按这个规则处理。安装或更新会覆盖包内指定的封面，但不会删除独立下载的原图片。
 
@@ -136,7 +138,7 @@ v21-v23 的 `repository/tag` 设置会被读为对应仓库的管理表地址，
 
 ## 封面
 
-把 PNG 放入该游戏配置目录，例如 `newpal/cover.png`，在对应 catalog 条目增加 `"cover": "newpal/cover.png"`，递增 `version` 后重新打包即可。建议竖版 2:3 封面；启动器按各展示区域缩放裁切。未声明时无需占位图，当前预置包尚未附带正式封面素材。
+把 PNG 放入该游戏配置目录，例如 `newpal/cover.png`，在对应 catalog 条目增加 `"cover": "newpal/cover.png"`，然后重新打包。测试时保持现有 `version`；维护者明确要求发布新版本时才递增。建议竖版 2:3 封面；启动器按各展示区域缩放裁切。未声明时无需占位图。
 
 玩家应用选中的适配包后，封面以该 EXE 独立路径安装，自动设置为当前封面并立即刷新，不必重启启动器。同目录不同 EXE 不共享该文件。所有条目的资源虽在同一下载包中，只安装玩家选中的那个条目。
 

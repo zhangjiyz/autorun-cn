@@ -10,18 +10,25 @@ static char *read_all( const char *path, size_t *size )
 }
 int main( int argc, char **argv )
 {
-    assert( argc == 4 );
-    struct autorun_update_source source;
+    assert( argc == 5 );
+    struct autorun_update_source source, tagged;
     assert( autorun_profile_source( &source, "owner/repo", "" ) );
-    assert( !strcmp( source.api, "https://api.github.com/repos/owner/repo/releases/latest" ) );
-    assert( autorun_profile_source( &source, "owner/repo", "profiles" ) );
-    assert( !strcmp( source.api, "https://api.github.com/repos/owner/repo/releases/tags/profiles" ) );
+    assert( !strcmp( source.api, "https://cnb.cool/owner/repo/-/releases/latest" ) );
+    assert( autorun_profile_source( &tagged, AUTORUN_DEFAULT_REPOSITORY, "profiles" ) );
+    assert( !strcmp( tagged.api, "https://cnb.cool/PalmMuse/autorun-cn/-/releases/tags/profiles" ) );
+    assert( tagged.allow_prerelease );
     assert( !autorun_profile_source( &source, "owner/repo/../../bad", "" ) );
     assert( !autorun_profile_source( &source, "owner/repo?x", "" ) );
     assert( !autorun_profile_source( &source, "owner/repo", "../bad" ) );
     assert( autorun_profile_source( &source, AUTORUN_DEFAULT_REPOSITORY, "" ) );
-    assert( !strcmp( runtime_source.api, "https://api.github.com/repos/zhangjiyz/autorun-cn/releases/latest" ) );
+#ifdef AUTORUN_RUNTIME_RELEASE_TAG
+    assert( !strcmp( runtime_source.api, "https://cnb.cool/PalmMuse/autorun-cn/-/releases/tags/" AUTORUN_RUNTIME_RELEASE_TAG ) );
+    assert( runtime_source.allow_prerelease );
+#else
+    assert( !strcmp( runtime_source.api, "https://cnb.cool/PalmMuse/autorun-cn/-/releases/latest" ) );
+    assert( !runtime_source.allow_prerelease );
     assert( !strcmp( runtime_source.api, source.api ) );
+#endif
     assert( !strcmp( runtime_source.prefix, source.prefix ) );
     assert( !strcmp( runtime_source.asset, "autorun.zip" ) );
     struct autorun_release release;
@@ -37,10 +44,19 @@ int main( int argc, char **argv )
     free( data );
     data = read_all( argv[3], &size );
     assert( !parse_release( (const void *)data, size, &release, &source ) );
+    assert( parse_release( (const void *)data, size, &release, &tagged ) );
+#ifdef AUTORUN_RUNTIME_RELEASE_TAG
+    assert( parse_release( (const void *)data, size, &release, &runtime_source ) );
+#else
+    assert( !parse_release( (const void *)data, size, &release, &runtime_source ) );
+#endif
+    free( data );
+    data = read_all( argv[4], &size );
+    assert( !parse_release( (const void *)data, size, &release, &source ) );
     assert( !parse_release( (const void *)data, size, &release, &runtime_source ) );
     free( data );
     char out[800];
-    memset( &release, 0, sizeof(release) ); strcpy( release.url, "https://github.com/other/repo/releases/download/v1/autorun-profiles.zip" );
+    memset( &release, 0, sizeof(release) ); strcpy( release.url, "https://cnb.cool/other/repo/-/releases/download/v1/autorun-profiles.zip" );
     assert( autorun_update_download_source( &source, "/tmp", &release, out, sizeof(out), NULL, NULL ) == AUTORUN_UPDATE_INVALID );
     Sha256Context hash;
     sha256ContextCreate( &hash ); sha256ContextUpdate( &hash, "abc", 3 );

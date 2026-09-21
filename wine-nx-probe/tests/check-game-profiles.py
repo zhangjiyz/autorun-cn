@@ -76,12 +76,12 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
         common.append('-Wno-format-truncation')
     core = root / 'core'
     run(*common, PROBE / 'tests/game_profiles.c', PROBE / 'source/game_cheats.c',
-        *flags('minizip', 'libpng'), '-lz', '-o', core)
+        *flags('minizip', 'libpng', 'openssl'), '-lz', '-o', core)
     run(core, valid, *bad)
     # v21 packages remain readable by the new runtime.
     legacy = json.loads(json.dumps(data)); legacy['schema'] = 1
     for entry in legacy['profiles']:
-        entry.pop('cheats', None); entry.pop('cover', None); entry['min_api'] = 1
+        entry.pop('cheats', None); entry.pop('cover', None); entry.pop('binary_patch', None); entry['min_api'] = 1
     (maintenance / 'catalog.json').write_text(json.dumps(legacy))
     pack.build(maintenance / 'catalog.json', root / 'legacy.zip')
     run(core, root / 'legacy.zip')
@@ -111,7 +111,7 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
     invalid('extra-cover', list(extended.items()) + [('extra/cover.png', png)])
     run(core, root / 'framework.zip', *bad)
     framework = root / 'framework'
-    run(*common, PROBE / 'tests/game_cheats.c', PROBE / 'source/game_cheats.c', *flags('minizip', 'libpng'), '-lz', '-o', framework)
+    run(*common, PROBE / 'tests/game_cheats.c', PROBE / 'source/game_cheats.c', *flags('minizip', 'libpng', 'openssl'), '-lz', '-o', framework)
     run(framework, root / 'framework.zip')
     # The publisher rejects invalid numeric definitions and PNGs before release.
     for change in ({'step': 0}, {'default': 11}, {'max': 2147483648}, {'enabled': True}):
@@ -132,13 +132,16 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
     else:
         raise AssertionError('truncated PNG accepted')
 
-    def asset(name, repository='zhangjiyz/autorun-cn'):
-        return dict(name=name, browser_download_url=f'https://github.com/{repository}/releases/download/v1/{name}',
-                    size=1234, digest='sha256:' + 'a' * 64)
+    def asset(name, repository='PalmMuse/autorun-cn'):
+        return dict(name=name, browser_download_url=f'https://cnb.cool/{repository}/-/releases/download/v1/{name}',
+                    size=1234, hash_algo='sha256', hash_value='a' * 64)
     metadata = dict(tag_name='v1', name='Release', published_at='2026-09-21T00:00:00Z',
                     body='Test only', draft=False, prerelease=False,
                     assets=[asset('autorun.zip'), asset('autorun-profiles.zip'), asset('other.zip')])
     release = root / 'release.json'; release.write_text(json.dumps(metadata))
+    metadata['prerelease'] = True
+    prerelease = root / 'prerelease.json'; prerelease.write_text(json.dumps(metadata))
+    metadata['prerelease'] = False
     metadata['assets'] = [asset('autorun-profiles.zip')]
     profiles = root / 'profiles.json'; profiles.write_text(json.dumps(metadata))
     metadata['assets'] = [asset('autorun-profiles.zip', 'danfromtico/autorun'), asset('autorun.zip', 'danfromtico/autorun')]
@@ -147,10 +150,18 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
     shim = '-I' + str(PROBE / 'tests/profiles-shims')
     run(*common, '-Wno-deprecated-declarations', shim, PROBE / 'tests/autorun_profile_update.c',
         *flags('libcurl', 'openssl'), '-o', transport)
-    run(transport, release, profiles, wrong)
+    run(transport, release, profiles, prerelease, wrong)
+    debug_transport = root / 'debug-transport'
+    run(*common, '-Wno-deprecated-declarations', '-DAUTORUN_DEBUG_BUILD',
+        '-DAUTORUN_RUNTIME_RELEASE_TAG="profile-test-002"', shim,
+        PROBE / 'tests/autorun_profile_update.c', *flags('libcurl', 'openssl'), '-o', debug_transport)
+    run(debug_transport, release, profiles, prerelease, wrong)
 
     runtime = root / 'runtime'; (runtime / 'profiles').mkdir(parents=True)
     pack.build_release(PROBE / 'profiles/catalog.json', runtime / 'profiles')
+    versions = {profile['id']: profile['version'] for profile in data['profiles']}
+    base_version = versions['newpal']
+    other_version = versions['zhaoyun-2002ls']
     # Start with no source file to test the new default management UI.
     updated = root / 'updated'
     newer = json.loads(json.dumps(data)); newer['profiles'][0]['version'] += 1
@@ -161,16 +172,24 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
         PROBE / 'source/launcher_profiles.c', PROBE / 'source/game_profiles.c', PROBE / 'source/game_cheats.c',
         PROBE / 'source/autorun_update.c',
         *flags('sdl2', 'SDL2_ttf', 'minizip', 'libpng', 'libcurl', 'openssl'), '-lz', '-o', ui)
-    run(ui, runtime, updated)
+    run(ui, runtime, updated, base_version, other_version)
+    debug_runtime = root / 'debug-runtime'; (debug_runtime / 'profiles').mkdir(parents=True)
+    pack.build_release(PROBE / 'profiles/catalog.json', debug_runtime / 'profiles')
+    debug_ui = root / 'debug-ui'
+    run(*common, '-Wno-deprecated-declarations', '-DAUTORUN_DEBUG_BUILD', shim,
+        PROBE / 'tests/launcher_profiles.c', PROBE / 'source/launcher_profiles.c',
+        PROBE / 'source/game_profiles.c', PROBE / 'source/game_cheats.c', PROBE / 'source/autorun_update.c',
+        *flags('sdl2', 'SDL2_ttf', 'minizip', 'libpng', 'libcurl', 'openssl'), '-lz', '-o', debug_ui)
+    run(debug_ui, debug_runtime, updated, base_version, other_version)
     cheats_ui = root / 'cheats-ui'
     run(*common, PROBE / 'tests/launcher_cheats.c', PROBE / 'source/launcher_cheats.c',
         PROBE / 'source/game_profiles.c', PROBE / 'source/game_cheats.c',
-        *flags('sdl2', 'SDL2_ttf', 'minizip', 'libpng'), '-lz', '-o', cheats_ui)
+        *flags('sdl2', 'SDL2_ttf', 'minizip', 'libpng', 'openssl'), '-lz', '-o', cheats_ui)
     run(cheats_ui, runtime, root / 'framework.zip')
     network = root / 'network-test'
     run(*common, '-Wno-deprecated-declarations', shim, PROBE / 'tests/profile_network.c',
         PROBE / 'source/launcher_profiles.c', PROBE / 'source/game_profiles.c', PROBE / 'source/game_cheats.c', PROBE / 'source/autorun_update.c',
         '-Wl,--wrap=autorun_update_text', '-Wl,--wrap=autorun_update_file',
         *flags('sdl2', 'SDL2_ttf', 'minizip', 'libcurl', 'openssl', 'libpng'), '-lz', '-o', network)
-    run(network, runtime, runtime / 'profiles/profile-newpal-v2.zip', updated)
-    print('Profile package, cover, cheats, recovery, GitHub metadata and menu regression suite passed.')
+    run(network, runtime, runtime / f'profiles/profile-newpal-v{base_version}.zip', updated, base_version)
+    print('Profile package, cover, cheats, recovery, CNB metadata and menu regression suite passed.')

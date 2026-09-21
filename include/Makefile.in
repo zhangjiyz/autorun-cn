@@ -981,6 +981,7 @@ SOURCES = \
 	wine/mmsystem16.h \
 	wine/mscvpdb.h \
 	wine/mssign.h \
+	wine/nx_aspect_fit.h \
 	wine/nsi.h \
 	wine/opengl_driver.h \
 	wine/orpc.idl \

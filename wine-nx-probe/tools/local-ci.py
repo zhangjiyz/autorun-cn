@@ -54,7 +54,13 @@ def profile_index_url(repository, tag):
     if not repository:
         return ''
     channel = f'download/{tag}' if tag else 'latest/download'
-    return f'https://github.com/{repository}/releases/{channel}/autorun-profiles.tsv'
+    return f'https://cnb.cool/{repository}/-/releases/{channel}/autorun-profiles.tsv'
+
+
+def runtime_update_note(build_type, tag):
+    if build_type == 'Debug' and tag:
+        return f'主程序在线更新使用 CNB {default_repository()} 标签 {tag} 的 autorun.zip，可使用预发布。'
+    return f'主程序在线更新使用 CNB {default_repository()} 最新正式 Release 的 autorun.zip。'
 
 
 def verify_profiles(index):
@@ -99,17 +105,20 @@ def verify_profiles(index):
             if archive.testzip():
                 raise ValueError(f'Profile ZIP CRC validation failed: {filename}')
             catalog = archive.read('catalog.tsv').decode('utf-8').splitlines()
-            if len(catalog) != 2 or catalog[0] not in ('autorun-profiles-v1', 'autorun-profiles-v2'):
+            if len(catalog) != 2 or catalog[0] not in ('autorun-profiles-v1', 'autorun-profiles-v2', 'autorun-profiles-v3'):
                 raise ValueError(f'Profile ZIP must contain exactly one game: {filename}')
             columns = catalog[1].split('\t')
-            v2 = catalog[0] == 'autorun-profiles-v2'
-            if len(columns) != (8 if v2 else 6) or columns[:6] != fields[:6]:
+            version = int(catalog[0][-1])
+            if len(columns) != (9 if version == 3 else 8 if version == 2 else 6) or columns[:6] != fields[:6]:
                 raise ValueError(f'Profile ZIP metadata differs from index: {filename}')
             expected = {'catalog.tsv', f'{ident}/settings.txt', f'{ident}/keys.txt'}
-            if v2:
+            if version >= 2:
                 if int(api) < 2 or any(flag not in ('0', '1') for flag in columns[6:]):
                     raise ValueError(f'Invalid profile feature flags: {filename}')
-                for flag, resource in zip(columns[6:], ('cheats.txt', 'cover.png')):
+                resources = ('cheats.txt', 'cover.png', 'patch.txt') if version == 3 else ('cheats.txt', 'cover.png')
+                if version == 3 and columns[8] == '1' and int(api) < 3:
+                    raise ValueError(f'Binary patch requires profile API 3: {filename}')
+                for flag, resource in zip(columns[6:], resources):
                     if flag == '1':
                         expected.add(f'{ident}/{resource}')
             if len(entries) != len(expected) or {e.filename for e in entries} != expected:
@@ -152,12 +161,14 @@ def verify_runtime(path, profiles, commit, index_url=None):
         nro = archive.read(prefix + 'wine-nx-runtime.nro')
         if nro[16:20] != b'NRO0':
             raise ValueError('Invalid NRO header')
+        if index_url and index_url.encode() not in nro:
+            raise ValueError('Runtime NRO does not contain the configured profile source')
         if archive.read(prefix + 'profiles/autorun-profiles.tsv') != profiles.read_bytes():
             raise ValueError('Bundled and separate profile indexes differ')
         if any(name.startswith('profiles/') and name.lower().endswith('.zip') for name in actual):
             raise ValueError('Main package should only bundle the index, not game ZIPs')
         if index_url is not None:
-            expected = f'index-url={index_url}\nauto-update=1\n'.encode()
+            expected = f'index-url={index_url}\nauto-update=1\nbuild-index-url={index_url}\n'.encode()
             if archive.read(prefix + 'profile-updates.txt') != expected:
                 raise ValueError('Bundled profile update source differs from CI configuration')
         for arch in ('dxvk', 'dxvk64'):
@@ -200,6 +211,7 @@ class Pipeline:
                  '-e', f'WINE_NX_JOBS={self.args.jobs}',
                  '-e', f'AUTORUN_PROFILE_REPOSITORY={self.args.profile_repository}',
                  '-e', f'AUTORUN_PROFILE_TAG={self.args.profile_tag}',
+                 '-e', f'AUTORUN_BUILD_TYPE={self.args.build_type}',
                  '-e', 'UBSAN_OPTIONS=halt_on_error=1', '-e', 'SDL_VIDEODRIVER=dummy',
                  image, *command)
 
@@ -243,7 +255,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('mode', choices=('all', 'profiles', 'check'), nargs='?', default='all')
     parser.add_argument('--jobs', type=int, default=4)
-    parser.add_argument('--profile-repository', default=default_repository(), help='GitHub owner/repo; empty selects offline catalog')
+    parser.add_argument('--build-type', choices=('Debug', 'Release'), default='Release',
+                        help='Debug uses the profile-debug test Release by default; Release uses latest')
+    parser.add_argument('--profile-repository', default=default_repository(), help='CNB group/repo; empty selects offline catalog')
     parser.add_argument('--profile-tag', default='', help='Fixed profile Release tag; empty uses latest stable Release')
     parser.add_argument('--rebuild-mesa', action='store_true')
     parser.add_argument('--output', type=Path, help='New run directory; must not already exist')
@@ -256,8 +270,10 @@ def main():
         parser.error('--profile-repository must be owner/repo')
     if args.profile_tag and not re.fullmatch(component, args.profile_tag):
         parser.error('Invalid --profile-tag')
+    if args.build_type == 'Debug' and not args.profile_tag:
+        args.profile_tag = 'profile-debug'
     if args.plan:
-        print(f'Mode: {args.mode}; jobs: {args.jobs}; profile source: {args.profile_repository or "offline"}; tag: {args.profile_tag or "latest"}')
+        print(f'Mode: {args.mode}; build type: {args.build_type}; jobs: {args.jobs}; profile source: {args.profile_repository or "offline"}; tag: {args.profile_tag or "latest"}')
         print('Prepare Docker image -> profile transaction/menu tests -> DXVK/package tests')
         if args.mode == 'all':
             print('Verify/build Mesa -> build NRO + matching Wine DLLs + x86/AMD64 DXVK + VKD3D -> package autorun.zip')
@@ -301,7 +317,7 @@ def main():
         pipeline.container(image, 'python3', 'wine-nx-probe/tests/check_local_ci.py')
         pending = output / 'pending'
         pending.mkdir()
-        metadata = {'mode': args.mode, 'built_at': datetime.now(timezone.utc).isoformat(),
+        metadata = {'mode': args.mode, 'build_type': args.build_type, 'built_at': datetime.now(timezone.utc).isoformat(),
                     'source': before, 'container': capture('docker', 'image', 'inspect', image, '--format', '{{.Id}}'),
                     'profile_repository': args.profile_repository, 'profile_tag': args.profile_tag,
                     'profile_index_url': profile_index_url(args.profile_repository, args.profile_tag),
@@ -335,6 +351,7 @@ def main():
         if args.mode == 'check':
             notes += ['本轮仅运行检查，没有生成主程序、管理表或游戏适配包，无需上传 Release。', '']
         else:
+            runtime_update = runtime_update_note(args.build_type, args.profile_tag)
             notes += ['## 游戏适配包', '']
             notes += [f'- {p["name"]}：v{p["version"]}，最低适配 API {p["min_api"]}；`{p["filename"]}`'
                       for p in metadata['profiles']]
@@ -342,7 +359,7 @@ def main():
                   '先上传表中所有游戏 ZIP、主程序 autorun.zip（如有），确认附件可下载后，最后上传 autorun-profiles.tsv。',
                   '同时上传 SHA256SUMS 和 BUILD.json；RELEASE.md 可用作发布说明。',
                   '管理表固定名 autorun-profiles.tsv，游戏包按 profile-游戏ID-v版本.zip 命名。只发布配置时无需上传主程序。',
-                  f'主程序在线更新使用 {default_repository()} 最新正式 Release 的 autorun.zip。',
+                  runtime_update,
                   f'管理表地址（all 模式写入主程序）：{metadata["profile_index_url"] or "空（关闭在线来源）"}。',
                   '如使用固定配置标签，需要将配置包上传到该标签；空标签读取最新正式 Release。',
                   '不要将仅含配置包的 Release 设为主程序的 Latest。每个最新正式 Release 都必须带齐表中使用 latest 地址的 ZIP。',

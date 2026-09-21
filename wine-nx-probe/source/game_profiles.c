@@ -1,5 +1,6 @@
-/* A release contains a bounded catalog and text defaults, never executable payloads.
- * Apply with a three-way merge and a durable rollback record for configuration, cheats and cover files. */
+/* A release contains bounded declarative resources, never executable payloads.
+ * Apply settings with a durable rollback record; binary patches are hash-pinned
+ * byte replacements applied by native code to the exact executable selected by the launcher. */
 #include "game_profiles.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -13,6 +14,14 @@
 #include <png.h>
 #ifdef __SWITCH__
 #include <switch.h>
+#else
+#define OPENSSL_SUPPRESS_DEPRECATED
+#include <openssl/sha.h>
+#define SHA256_HASH_SIZE SHA256_DIGEST_LENGTH
+typedef SHA256_CTX Sha256Context;
+static void sha256ContextCreate( Sha256Context *c ) { SHA256_Init( c ); }
+static void sha256ContextUpdate( Sha256Context *c, const void *p, size_t n ) { SHA256_Update( c, p, n ); }
+static void sha256ContextGetHash( Sha256Context *c, void *out ) { SHA256_Final( out, c ); }
 #endif
 
 #define CATALOG_LIMIT (128 * 1024)
@@ -58,8 +67,9 @@ int game_profile_matches( const struct game_profile *profile, const char *query 
  * The maintainer edits JSON; the packager generates this strict, small format. */
 static int parse_catalog( char *text, struct game_profile_catalog *catalog )
 {
-    char *line, *next, *field[8];
-    int v2 = !strncmp( text, "autorun-profiles-v2\n", 20 ), fields = v2 ? 8 : 6;
+    char *line, *next, *field[9];
+    int v3 = !strncmp( text, "autorun-profiles-v3\n", 20 );
+    int v2 = v3 || !strncmp( text, "autorun-profiles-v2\n", 20 ), fields = v3 ? 9 : v2 ? 8 : 6;
     if (!v2 && strncmp( text, "autorun-profiles-v1\n", 20 )) return 0;
     line = text + 20;
     catalog->count = 0;
@@ -87,6 +97,12 @@ static int parse_catalog( char *text, struct game_profile_catalog *catalog )
             if ((strcmp( field[6], "0" ) && strcmp( field[6], "1" )) ||
                 (strcmp( field[7], "0" ) && strcmp( field[7], "1" )) || p->min_api < 2) return 0;
             p->has_cheats = field[6][0] == '1'; p->has_cover = field[7][0] == '1';
+            if (v3)
+            {
+                if (strcmp( field[8], "0" ) && strcmp( field[8], "1" )) return 0;
+                p->has_patch = field[8][0] == '1';
+                if (p->has_patch && p->min_api < 3) return 0;
+            }
         }
         for (int i = 0; i < catalog->count; i++) if (!strcmp( field[0], catalog->entries[i].id )) return 0;
         strcpy( p->id, field[0] ); strcpy( p->name, field[1] );
@@ -163,10 +179,53 @@ static int read_zip_text( unzFile zip, char *out, size_t capacity )
     return 1;
 }
 
+static int hex_bytes( const char *text, unsigned char *out, unsigned int *size )
+{
+    size_t length = strlen( text );
+    if (!length || length > GAME_PROFILE_PATCH_MAX * 2 || (length & 1) || strspn( text, "0123456789abcdef" ) != length) return 0;
+    for (size_t i = 0; i < length / 2; i++)
+    {
+        unsigned int value;
+        if (sscanf( text + i * 2, "%2x", &value ) != 1) return 0;
+        out[i] = value;
+    }
+    *size = length / 2; return 1;
+}
+
+static int parse_binary_patch( const char *text, struct game_profile_patch *patch )
+{
+    static const char header[] = "autorun-binary-patch-v1\n";
+    static const char *keys[] = {"original-sha256", "patched-sha256", "offset", "old", "new"};
+    char values[5][160], *end;
+    unsigned long long offset;
+    unsigned int old_size, new_size;
+    if (strncmp( text, header, sizeof(header) - 1 )) return 0;
+    text += sizeof(header) - 1;
+    for (int i = 0; i < 5; i++)
+    {
+        size_t key = strlen( keys[i] ), length = strcspn( text, "\n" );
+        if (length <= key || text[key] != '=' || strncmp( text, keys[i], key ) || !text[length] ||
+            length - key - 1 >= sizeof(values[i])) return 0;
+        memcpy( values[i], text + key + 1, length - key - 1 ); values[i][length - key - 1] = 0;
+        text += length + 1;
+    }
+    if (*text || strlen( values[0] ) != 64 || strlen( values[1] ) != 64 ||
+        strspn( values[0], "0123456789abcdef" ) != 64 || strspn( values[1], "0123456789abcdef" ) != 64 ||
+        !strcmp( values[0], values[1] )) return 0;
+    errno = 0; offset = strtoull( values[2], &end, 10 );
+    if (errno || !values[2][0] || *end || values[2][0] == '-' ||
+        !hex_bytes( values[3], patch->old_bytes, &old_size ) ||
+        !hex_bytes( values[4], patch->new_bytes, &new_size ) || old_size != new_size ||
+        !memcmp( patch->old_bytes, patch->new_bytes, old_size )) return 0;
+    memset( patch->original_digest, 0, sizeof(patch->original_digest) );
+    memcpy( patch->original_digest, values[0], 64 ); memcpy( patch->patched_digest, values[1], 65 );
+    patch->offset = offset; patch->size = old_size; return 1;
+}
+
 static int allowed_key( const char *key, int controls )
 {
     static const char settings[] =
-        "|d3d|d3d9|own-controls|controller|verbose|profile|window-fit|sdl-audio|sd-stat-cache|"
+        "|title|d3d|d3d9|own-controls|controller|verbose|profile|window-fit|sdl-audio|sd-stat-cache|locale|wined3d-renderer|wined3d-frontbuffer-swap|"
         "aspect-fit|touch-coordinates|left-stick-run|left-stick-eight-way|left-stick-aim|left-stick-move|"
         "windows|dxvk-version|vkd3d-version|dxvk-hud|frame-limit|vsync|";
     static const char keys[] =
@@ -276,7 +335,7 @@ enum game_profile_result game_profiles_load( const char *archive, struct game_pr
 {
     unzFile zip = unzOpen64( archive );
     unz_global_info64 global;
-    unsigned char seen[GAME_PROFILE_MAX][4] = {{0}};
+    unsigned char seen[GAME_PROFILE_MAX][5] = {{0}};
     char *text = malloc( CATALOG_LIMIT );
     struct launcher_kv *raw = malloc( sizeof(*raw) );
     struct game_cheats *cheats = malloc( sizeof(*cheats) );
@@ -286,9 +345,10 @@ enum game_profile_result game_profiles_load( const char *archive, struct game_pr
     game_profiles_clear( catalog );
     if (!zip || !text || !raw || !cheats) { result = GAME_PROFILE_IO; goto done; }
     if (unzGetGlobalInfo64( zip, &global ) != UNZ_OK || !global.number_entry ||
-        global.number_entry > 1 + GAME_PROFILE_MAX * 4 || unzLocateFile( zip, "catalog.tsv", 1 ) != UNZ_OK ||
+        global.number_entry > 1 + GAME_PROFILE_MAX * 5 || unzLocateFile( zip, "catalog.tsv", 1 ) != UNZ_OK ||
         !read_zip_text( zip, text, CATALOG_LIMIT ) || !parse_catalog( text, catalog )) goto done;
-    for (int i = 0; i < catalog->count; i++) expected_count += 2 + catalog->entries[i].has_cheats + catalog->entries[i].has_cover;
+    for (int i = 0; i < catalog->count; i++) expected_count += 2 + catalog->entries[i].has_cheats +
+        catalog->entries[i].has_cover + catalog->entries[i].has_patch;
     if (global.number_entry != (unsigned)expected_count || unzGoToFirstFile( zip ) != UNZ_OK) goto done;
     do
     {
@@ -298,11 +358,11 @@ enum game_profile_result game_profiles_load( const char *archive, struct game_pr
         if (unzGetCurrentFileInfo64( zip, &info, name, sizeof(name), NULL, 0, NULL, 0 ) != UNZ_OK ||
             info.size_filename >= sizeof(name) || strlen( name ) != info.size_filename) goto done;
         if (!strcmp( name, "catalog.tsv" )) { if (++index_count != 1) goto done; continue; }
-        for (int i = 0; i < catalog->count && !found; i++) for (int k = 0; k < 4; k++)
+        for (int i = 0; i < catalog->count && !found; i++) for (int k = 0; k < 5; k++)
         {
             struct game_profile *p = &catalog->entries[i];
-            static const char *files[] = {"settings.txt", "keys.txt", "cheats.txt", "cover.png"};
-            if ((k == 2 && !p->has_cheats) || (k == 3 && !p->has_cover)) continue;
+            static const char *files[] = {"settings.txt", "keys.txt", "cheats.txt", "cover.png", "patch.txt"};
+            if ((k == 2 && !p->has_cheats) || (k == 3 && !p->has_cover) || (k == 4 && !p->has_patch)) continue;
             snprintf( expected, sizeof(expected), "%s/%s", p->id, files[k] );
             if (strcmp( name, expected )) continue;
             if (seen[i][k]++) goto done;
@@ -320,6 +380,10 @@ enum game_profile_result game_profiles_load( const char *archive, struct game_pr
                     if (!game_cheats_parse( raw->text, cheats )) goto done;
                     p->cheats = *raw;
                 }
+                else if (k == 4)
+                {
+                    if (!parse_binary_patch( raw->text, &p->patch )) goto done;
+                }
                 else if (!canonical_kv( raw, k ? &p->keys : &p->settings, k )) goto done;
             }
             found = 1; break;
@@ -329,7 +393,7 @@ enum game_profile_result game_profiles_load( const char *archive, struct game_pr
     if (next != UNZ_END_OF_LIST_OF_FILE || index_count != 1) goto done;
     for (int i = 0; i < catalog->count; i++)
         if (!seen[i][0] || !seen[i][1] || seen[i][2] != catalog->entries[i].has_cheats ||
-            seen[i][3] != catalog->entries[i].has_cover) goto done;
+            seen[i][3] != catalog->entries[i].has_cover || seen[i][4] != catalog->entries[i].has_patch) goto done;
     result = GAME_PROFILE_OK;
  done:
     if (zip) unzClose( zip );
@@ -435,6 +499,174 @@ static int durable_write( const char *path, const void *data, size_t size )
     if (!ok) { remove( temp ); return 0; }
     if (remove( path ) && errno != ENOENT) return 0;
     return !rename( temp, path ) && sync_parent( path );
+}
+
+static int patch_paths( const char *exe, char *backup, char *state, char *temp )
+{
+    return strlen( exe ) < 700 &&
+        snprintf( backup, 768, "%s.autorun-before-profile-patch", exe ) < 768 &&
+        snprintf( state, 768, "%s.autorun-profile-patch", exe ) < 768 &&
+        snprintf( temp, 768, "%s.autorun-patch.tmp", exe ) < 768;
+}
+
+static int file_digest( const char *path, char digest[65] )
+{
+    unsigned char data[65536], hash[SHA256_HASH_SIZE];
+    static const char hex[] = "0123456789abcdef";
+    Sha256Context context;
+    FILE *file;
+    size_t n;
+    if (!safe_path( path ) || !(file = fopen( path, "rb" ))) return 0;
+    sha256ContextCreate( &context );
+    while ((n = fread( data, 1, sizeof(data), file ))) sha256ContextUpdate( &context, data, n );
+    int ok = !ferror( file );
+    if (fclose( file )) ok = 0;
+    if (!ok) return 0;
+    sha256ContextGetHash( &context, hash );
+    for (size_t i = 0; i < sizeof(hash); i++) { digest[i * 2] = hex[hash[i] >> 4]; digest[i * 2 + 1] = hex[hash[i] & 15]; }
+    digest[64] = 0; return 1;
+}
+
+static int copy_durable( const char *source, const char *destination )
+{
+    char temp[800];
+    unsigned char data[65536];
+    FILE *in = NULL, *out = NULL;
+    size_t n;
+    int ok = 0;
+    if (snprintf( temp, sizeof(temp), "%s.new", destination ) >= (int)sizeof(temp) ||
+        !safe_path( source ) || !safe_path( destination ) || !safe_path( temp ) ||
+        !(in = fopen( source, "rb" )) || !(out = fopen( temp, "wb" ))) goto done;
+    while ((n = fread( data, 1, sizeof(data), in ))) if (fwrite( data, 1, n, out ) != n) goto done;
+    if (ferror( in ) || fflush( out ) || fsync( fileno( out ) )) goto done;
+    if (fclose( out )) { out = NULL; goto done; } out = NULL;
+    if ((remove( destination ) && errno != ENOENT) || rename( temp, destination ) || !sync_parent( destination )) goto done;
+    ok = 1;
+ done:
+    if (in) fclose( in );
+    if (out) fclose( out );
+    if (!ok) remove( temp );
+    return ok;
+}
+
+static int patch_text( const struct game_profile_patch *patch, char *text, size_t capacity )
+{
+    static const char hex[] = "0123456789abcdef";
+    char old[GAME_PROFILE_PATCH_MAX * 2 + 1], next[GAME_PROFILE_PATCH_MAX * 2 + 1];
+    if (!patch->size || patch->size > GAME_PROFILE_PATCH_MAX || strlen( patch->original_digest ) != 64 ||
+        strlen( patch->patched_digest ) != 64 || strspn( patch->original_digest, "0123456789abcdef" ) != 64 ||
+        strspn( patch->patched_digest, "0123456789abcdef" ) != 64 ||
+        !strcmp( patch->original_digest, patch->patched_digest ) ||
+        !memcmp( patch->old_bytes, patch->new_bytes, patch->size )) return 0;
+    for (unsigned int i = 0; i < patch->size; i++)
+    {
+        old[i * 2] = hex[patch->old_bytes[i] >> 4]; old[i * 2 + 1] = hex[patch->old_bytes[i] & 15];
+        next[i * 2] = hex[patch->new_bytes[i] >> 4]; next[i * 2 + 1] = hex[patch->new_bytes[i] & 15];
+    }
+    old[patch->size * 2] = next[patch->size * 2] = 0;
+    int n = snprintf( text, capacity, "autorun-binary-patch-v1\noriginal-sha256=%s\npatched-sha256=%s\n"
+        "offset=%llu\nold=%s\nnew=%s\n", patch->original_digest, patch->patched_digest,
+        patch->offset, old, next );
+    return n > 0 && (size_t)n < capacity;
+}
+
+static int patch_state_read( const char *state, struct game_profile_patch *patch, int *exists )
+{
+    char text[1024];
+    FILE *file;
+    size_t size;
+    *exists = 0;
+    if (!safe_path( state )) return 0;
+    if (!(file = fopen( state, "rb" ))) return errno == ENOENT;
+    size = fread( text, 1, sizeof(text) - 1, file );
+    int ok = size < sizeof(text) - 1 && fgetc( file ) == EOF && !ferror( file );
+    if (fclose( file )) ok = 0;
+    if (!ok || memchr( text, 0, size )) return 0;
+    text[size] = 0; *exists = 1; memset( patch, 0, sizeof(*patch));
+    return parse_binary_patch( text, patch );
+}
+
+enum game_profile_result game_profile_patch_recover( const char *exe )
+{
+    char backup[768], state[768], temp[768], digest[65];
+    struct game_profile_patch patch;
+    struct stat st;
+    int exists;
+    if (!patch_paths( exe, backup, state, temp ) || !patch_state_read( state, &patch, &exists )) return GAME_PROFILE_RECOVERY;
+    if (!exists) return GAME_PROFILE_OK;
+    if (file_digest( exe, digest ))
+    {
+        if (!strcmp( digest, patch.patched_digest )) return GAME_PROFILE_OK;
+        if (!strcmp( digest, patch.original_digest )) return erase_durable( state ) ? GAME_PROFILE_OK : GAME_PROFILE_RECOVERY;
+        return GAME_PROFILE_RECOVERY;
+    }
+    if (!lstat( exe, &st ) || errno != ENOENT || !file_digest( backup, digest ) ||
+        strcmp( digest, patch.original_digest ) || !copy_durable( backup, exe ) || !erase_durable( state ))
+        return GAME_PROFILE_RECOVERY;
+    remove( temp ); return GAME_PROFILE_OK;
+}
+
+enum game_profile_result game_profile_patch_apply( const char *exe, const struct game_profile_patch *patch, int *changed )
+{
+    char backup[768], state[768], temp[768], digest[65], text[1024];
+    unsigned char current[GAME_PROFILE_PATCH_MAX];
+    struct stat st;
+    FILE *file;
+    int state_exists;
+    struct game_profile_patch active;
+    *changed = 0;
+    if (!patch_paths( exe, backup, state, temp ) || !patch_text( patch, text, sizeof(text)) ||
+        patch->offset > ULLONG_MAX - patch->size) return GAME_PROFILE_INVALID;
+    enum game_profile_result recovered = game_profile_patch_recover( exe );
+    if (recovered != GAME_PROFILE_OK) return recovered;
+    if (!file_digest( exe, digest )) return GAME_PROFILE_IO;
+    if (!strcmp( digest, patch->patched_digest )) return GAME_PROFILE_OK;
+    if (strcmp( digest, patch->original_digest )) return GAME_PROFILE_UNSUPPORTED;
+    if (!(file = fopen( exe, "rb" ))) return GAME_PROFILE_IO;
+    int bytes_ok = !fseeko( file, patch->offset, SEEK_SET ) &&
+        fread( current, 1, patch->size, file ) == patch->size &&
+        !ferror( file ) && !memcmp( current, patch->old_bytes, patch->size );
+    if (fclose( file )) bytes_ok = 0;
+    if (!bytes_ok) return GAME_PROFILE_UNSUPPORTED;
+    if (!lstat( backup, &st ))
+    {
+        if (!S_ISREG( st.st_mode ) || !file_digest( backup, digest ) || strcmp( digest, patch->original_digest )) return GAME_PROFILE_RECOVERY;
+    }
+    else if (errno != ENOENT || !copy_durable( exe, backup ) || !file_digest( backup, digest ) ||
+             strcmp( digest, patch->original_digest )) return GAME_PROFILE_IO;
+    if (!patch_state_read( state, &active, &state_exists ) || state_exists ||
+        !durable_write( state, text, strlen(text) ) || !copy_durable( exe, temp )) return GAME_PROFILE_IO;
+    file = fopen( temp, "r+b" );
+    int write_ok = file && !fseeko( file, patch->offset, SEEK_SET ) &&
+        fwrite( patch->new_bytes, 1, patch->size, file ) == patch->size &&
+        !fflush( file ) && !fsync( fileno( file ) );
+    if (file && fclose( file )) write_ok = 0;
+    if (!write_ok || !file_digest( temp, digest ) || strcmp( digest, patch->patched_digest ))
+    { remove( temp ); erase_durable( state ); return GAME_PROFILE_IO; }
+    if ((remove( exe ) && errno != ENOENT) || rename( temp, exe ) || !sync_parent( exe ))
+    {
+        remove( temp );
+        if (!copy_durable( backup, exe ) || !erase_durable( state )) return GAME_PROFILE_RECOVERY;
+        return GAME_PROFILE_IO;
+    }
+    *changed = 1; return GAME_PROFILE_OK;
+}
+
+enum game_profile_result game_profile_patch_restore( const char *exe )
+{
+    char backup[768], state[768], temp[768], digest[65];
+    struct game_profile_patch patch;
+    int exists;
+    if (!patch_paths( exe, backup, state, temp ) || !patch_state_read( state, &patch, &exists )) return GAME_PROFILE_RECOVERY;
+    if (!exists) return GAME_PROFILE_OK;
+    enum game_profile_result recovered = game_profile_patch_recover( exe );
+    if (recovered != GAME_PROFILE_OK || !file_digest( exe, digest )) return GAME_PROFILE_RECOVERY;
+    if (!strcmp( digest, patch.original_digest )) return erase_durable( state ) ? GAME_PROFILE_OK : GAME_PROFILE_RECOVERY;
+    if (strcmp( digest, patch.patched_digest ) || !file_digest( backup, digest ) ||
+        strcmp( digest, patch.original_digest ) || !copy_durable( backup, exe ) ||
+        !file_digest( exe, digest ) || strcmp( digest, patch.original_digest ) || !erase_durable( state ))
+        return GAME_PROFILE_RECOVERY;
+    return GAME_PROFILE_OK;
 }
 
 static uint32_t snapshot_crc( const struct snapshot *s )
@@ -625,7 +857,7 @@ enum game_profile_result game_profile_apply( const char *settings, const char *k
     if (profile->min_api > GAME_PROFILE_API) return GAME_PROFILE_INCOMPATIBLE;
     if ((result = game_profile_binding_read( settings, &binding )) != GAME_PROFILE_OK) return result;
     first = strcmp( binding.id, profile->id ) || strcmp( binding.repository, repository ) || strcmp( binding.tag, tag );
-    if (!first && profile->version <= binding.version) return GAME_PROFILE_OLD;
+    if (!first && profile->version < binding.version) return GAME_PROFILE_OLD;
     result = GAME_PROFILE_IO;
     if (!target_paths( &t, settings, keys ) || !(before = malloc( sizeof(*before) )) ||
         !(after = malloc( sizeof(*after) )) || !(kv = malloc( sizeof(*kv) )) || !(old = malloc( sizeof(*old) )) ) goto done;
@@ -735,6 +967,7 @@ const char *game_profile_error( enum game_profile_result result )
     case GAME_PROFILE_RECOVERY: return "上次适配安装未完成，且原配置未能恢复。请保持备份文件，修复存储问题后重试。";
     case GAME_PROFILE_OLD: return "当前适配包已是此更新源的最新版本，或本地版本更新。";
     case GAME_PROFILE_INCOMPATIBLE: return "此适配包需要更新版本的 Autorun，请先更新主程序。";
+    case GAME_PROFILE_UNSUPPORTED: return "所选游戏程序不是此适配包支持的精确版本，未修改 EXE。";
     }
     return "适配包操作失败。";
 }
