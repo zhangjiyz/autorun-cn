@@ -1327,6 +1327,7 @@ static HRESULT WINAPI DECLSPEC_HOTPATCH d3d9_device_Present(IDirect3DDevice9Ex *
 {
     struct d3d9_device *device = impl_from_IDirect3DDevice9Ex(iface);
     struct d3d9_swapchain *swapchain;
+    RECT movie_src, movie_dst;
     unsigned int i;
     HRESULT hr;
 
@@ -1343,6 +1344,7 @@ static HRESULT WINAPI DECLSPEC_HOTPATCH d3d9_device_Present(IDirect3DDevice9Ex *
     for (i = 0; i < device->implicit_swapchain_count; ++i)
     {
         swapchain = wined3d_swapchain_get_parent(device->implicit_swapchains[i]);
+        d3d9_pal3_movie_present_rects(device, swapchain, &src_rect, &dst_rect, &movie_src, &movie_dst);
         if (FAILED(hr = wined3d_swapchain_present(swapchain->wined3d_swapchain,
                 src_rect, dst_rect, dst_window_override, swapchain->swap_interval, 0)))
         {
@@ -3279,6 +3281,8 @@ static HRESULT WINAPI d3d9_device_DrawPrimitive(IDirect3DDevice9Ex *iface,
             wined3d_primitive_type_from_d3d(primitive_type), 0);
 
     /* Instancing is ignored for non-indexed draws. */
+    if (device->pal3_movie.enabled)
+        InterlockedExchange(&device->pal3_movie.active, FALSE);
     wined3d_device_context_draw(device->immediate_context, start_vertex, vertex_count, 0, 0);
 
     d3d9_rts_flag_auto_gen_mipmap(device);
@@ -3322,6 +3326,8 @@ static HRESULT WINAPI d3d9_device_DrawIndexedPrimitive(IDirect3DDevice9Ex *iface
     wined3d_device_apply_stateblock(device->wined3d_device, device->state);
     d3d9_device_upload_sysmem_index_buffer(device, &start_idx, index_count);
     wined3d_device_context_flush_mapped_buffer(device->immediate_context, device->stateblock_state->index_buffer);
+    if (device->pal3_movie.enabled)
+        InterlockedExchange(&device->pal3_movie.active, FALSE);
     wined3d_device_context_draw_indexed(device->immediate_context, base_vertex_idx, start_idx, index_count, 0,
             device->stateblock_state->streams[0].frequency);
     d3d9_rts_flag_auto_gen_mipmap(device);
@@ -3377,6 +3383,8 @@ static HRESULT WINAPI d3d9_device_DrawPrimitiveUP(IDirect3DDevice9Ex *iface,
     wined3d_device_apply_stateblock(device->wined3d_device, device->state);
 
     /* Instancing is ignored for non-indexed draws. */
+    if (device->pal3_movie.enabled)
+        InterlockedExchange(&device->pal3_movie.active, FALSE);
     wined3d_device_context_draw(device->immediate_context, vb_pos / stride, vtx_count, 0, 0);
 
     wined3d_stateblock_set_stream_source(device->state, 0, NULL, 0, 0);
@@ -3444,6 +3452,8 @@ static HRESULT WINAPI d3d9_device_DrawIndexedPrimitiveUP(IDirect3DDevice9Ex *ifa
     wined3d_device_apply_stateblock(device->wined3d_device, device->state);
     wined3d_device_context_set_primitive_type(device->immediate_context,
             wined3d_primitive_type_from_d3d(primitive_type), 0);
+    if (device->pal3_movie.enabled)
+        InterlockedExchange(&device->pal3_movie.active, FALSE);
     wined3d_device_context_draw_indexed(device->immediate_context,
             vb_pos / vertex_stride - min_vertex_idx, ib_pos / idx_fmt_size, idx_count, 0,
             device->stateblock_state->streams[0].frequency);
@@ -4739,6 +4749,9 @@ HRESULT device_init(struct d3d9_device *device, struct d3d9 *parent, struct wine
     struct wined3d_adapter *wined3d_adapter;
     struct d3d9_swapchain *d3d_swapchain;
     struct wined3d_caps wined3d_caps;
+    char image[MAX_PATH], movie_center[2];
+    const char *name, *slash;
+    DWORD image_len;
     unsigned int output_idx;
     unsigned i, count = 1;
     D3DCAPS9 caps;
@@ -4756,6 +4769,16 @@ HRESULT device_init(struct d3d9_device *device, struct d3d9 *parent, struct wine
     };
 
     device->multithreaded = !!(flags & D3DCREATE_MULTITHREADED);
+    image_len = GetModuleFileNameA(NULL, image, sizeof(image));
+    if (GetEnvironmentVariableA("WINE_NX_PAL3_MOVIE_CENTER", movie_center, sizeof(movie_center)) == 1
+            && movie_center[0] == '1'
+            && image_len && image_len < sizeof(image))
+    {
+        name = strrchr(image, '\\');
+        slash = strrchr(image, '/');
+        if (slash && (!name || slash > name)) name = slash;
+        device->pal3_movie.enabled = !lstrcmpiA(name ? name + 1 : image, "PAL3.exe");
+    }
     output_idx = adapter;
     if (output_idx >= parent->wined3d_output_count)
         return D3DERR_INVALIDCALL;

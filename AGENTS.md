@@ -27,7 +27,7 @@
 - `wine-nx-probe/source/runtime.c`：每游戏配置、输入、窗口合成、WineD3D 环境和运行期日志。
 - `wine-nx-probe/source/audio_unix.c`：Switch `audout` 共享音频后端。
 - `wine-nx-probe/source/game_profiles.c`：适配包校验、应用、回滚和哈希限定的二进制补丁。
-- `wine-nx-probe/profiles/catalog.json`：适配包映射；当前 schema 为 3，运行时 API 为 5。
+- `wine-nx-probe/profiles/catalog.json`：适配包映射；当前 schema 为 3，运行时 API 为 10。
 - `dlls/ddraw/surface.c`：新仙剑 2001 的 Wine DirectDraw 前缓冲实验。
 - `wine-nx-probe/tools/`、`ci/build-runtime.sh`、`docs/local-ci.md`：本地检查、打包和 CNB Release 流程。
 

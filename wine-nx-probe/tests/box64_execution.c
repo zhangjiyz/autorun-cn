@@ -490,6 +490,45 @@ int main(void)
         assert( f.calls == 5 );
     }
 
+    /* PAL3patch calls an assembly trampoline between the subtraction and
+     * FSTP; its FNSAVE/FRSTOR pair must preserve the pending x87 delta. */
+    {
+        static const unsigned char saved_delta_program[] = {
+            0xdb,0xe3,                          /* fninit */
+            0xdd,0x05,0x80,0x30,0,0x10,         /* fld qword [BASE+0x3080] */
+            0xdc,0x25,0x88,0x30,0,0x10,         /* fsub qword [BASE+0x3088] */
+            0xdd,0x35,0xa0,0x30,0,0x10,         /* fnsave [BASE+0x30a0] */
+            0xdd,0x25,0xa0,0x30,0,0x10,         /* frstor [BASE+0x30a0] */
+            0xd9,0x1d,0x90,0x30,0,0x10,         /* fstp dword [BASE+0x3090] */
+            0xba,0x20,0x80,0,0x10,0xff,0xe2     /* completion */
+        };
+        static const unsigned char saved_delta_program16[] = {
+            0xdb,0xe3,                          /* fninit */
+            0xdd,0x05,0x80,0x30,0,0x10,         /* fld qword [BASE+0x3080] */
+            0xdc,0x25,0x88,0x30,0,0x10,         /* fsub qword [BASE+0x3088] */
+            0x66,0xdd,0x35,0xa0,0x30,0,0x10,    /* fnsave 94-byte [BASE+0x30a0] */
+            0x66,0xdd,0x25,0xa0,0x30,0,0x10,    /* frstor 94-byte [BASE+0x30a0] */
+            0xd9,0x1d,0x90,0x30,0,0x10,         /* fstp dword [BASE+0x3090] */
+            0xba,0x20,0x80,0,0x10,0xff,0xe2     /* completion */
+        };
+        const double current = 70.9171948, previous = 70.9011948;
+        float delta = 0;
+        unsigned int pass;
+
+        for (pass = 0; pass < 2; pass++)
+        {
+            if (pass) put_code( memory, 0x500, saved_delta_program16, sizeof(saved_delta_program16) );
+            else put_code( memory, 0x500, saved_delta_program, sizeof(saved_delta_program) );
+            memcpy( memory + 0x3080, &current, sizeof(current) );
+            memcpy( memory + 0x3088, &previous, sizeof(previous) );
+            memset( memory + 0x3090, 0, sizeof(delta) );
+            init_context( &context, BASE + 0x500, BASE + 0x6000 );
+            assert( !wine_nx_box64_run( &context, BASE + 0x3000, &f.gates, &host, &f,
+                                       BASE + 0x8020, 100, &executed ) );
+            memcpy( &delta, memory + 0x3090, sizeof(delta) );
+            assert( fabsf( delta - 0.016f ) < 0.000001f );
+        }
+    }
     puts( "BEGIN CPUID/RDTSC" );
     /* CPUID reports the conservative feature set; RDTSC is monotonic. */
     {

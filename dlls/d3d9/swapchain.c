@@ -105,6 +105,24 @@ static ULONG WINAPI d3d9_swapchain_AddRef(IDirect3DSwapChain9Ex *iface)
     return refcount;
 }
 
+void d3d9_pal3_movie_present_rects(struct d3d9_device *device, struct d3d9_swapchain *swapchain,
+        const RECT **src_rect, const RECT **dst_rect, RECT *movie_src, RECT *movie_dst)
+{
+    struct wined3d_swapchain_desc desc;
+
+    if (!device->pal3_movie.enabled || !device->pal3_movie.active || *src_rect || *dst_rect)
+        return;
+
+    wined3d_swapchain_get_desc(swapchain->wined3d_swapchain, &desc);
+    if (desc.backbuffer_width < 800 || desc.backbuffer_height < 600)
+        return;
+
+    SetRect(movie_src, 0, 75, 800, 525);
+    SetRect(movie_dst, 0, 0, desc.backbuffer_width, desc.backbuffer_height);
+    *src_rect = movie_src;
+    *dst_rect = movie_dst;
+}
+
 static ULONG WINAPI d3d9_swapchain_Release(IDirect3DSwapChain9Ex *iface)
 {
     struct d3d9_swapchain *swapchain = impl_from_IDirect3DSwapChain9Ex(iface);
@@ -139,6 +157,7 @@ static HRESULT WINAPI DECLSPEC_HOTPATCH d3d9_swapchain_Present(IDirect3DSwapChai
 {
     struct d3d9_swapchain *swapchain = impl_from_IDirect3DSwapChain9Ex(iface);
     struct d3d9_device *device = impl_from_IDirect3DDevice9Ex(swapchain->parent_device);
+    RECT movie_src, movie_dst;
 
     TRACE("iface %p, src_rect %s, dst_rect %s, dst_window_override %p, dirty_region %p, flags %#lx.\n",
             iface, wine_dbgstr_rect(src_rect), wine_dbgstr_rect(dst_rect),
@@ -149,6 +168,8 @@ static HRESULT WINAPI DECLSPEC_HOTPATCH d3d9_swapchain_Present(IDirect3DSwapChai
 
     if (dirty_region)
         FIXME("Ignoring dirty_region %p.\n", dirty_region);
+
+    d3d9_pal3_movie_present_rects(device, swapchain, &src_rect, &dst_rect, &movie_src, &movie_dst);
 
     return wined3d_swapchain_present(swapchain->wined3d_swapchain,
             src_rect, dst_rect, dst_window_override, swapchain->swap_interval, flags);

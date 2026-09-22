@@ -982,6 +982,9 @@ SOURCES = \
 	wine/mscvpdb.h \
 	wine/mssign.h \
 	wine/nx_aspect_fit.h \
+	wine/nx_fixed_click.h \
+	wine/nx_input_codes.h \
+	wine/nx_stick_run.h \
 	wine/nsi.h \
 	wine/opengl_driver.h \
 	wine/orpc.idl \

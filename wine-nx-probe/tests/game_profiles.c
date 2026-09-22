@@ -147,6 +147,72 @@ int main( int argc, char **argv )
     assert( durable_write( t.pending, "bad", 3 ) );
     assert( game_profile_recover( settings, keys ) == GAME_PROFILE_RECOVERY );
     assert( !unlink( t.pending ) );
+    /* PAL3 patch files are direct replacements, while launcher settings still merge. */
+    if (catalog->entries[3].has_raw_files)
+    {
+        struct game_profile pal3 = catalog->entries[3];
+        char pal3_settings[768], pal3_keys[768], raw_paths[PAL3_RAW_COUNT][768];
+        const char *old_contents[] = {"old conf\n", "old patch DLL", "old forwarder DLL"};
+        snprintf( pal3_settings, sizeof(pal3_settings), "%s/PAL3.wine-nx.txt", resolved );
+        snprintf( pal3_keys, sizeof(pal3_keys), "%s/PAL3.keys.txt", resolved );
+        for (unsigned int i = 0; i < PAL3_RAW_COUNT; i++)
+        {
+            snprintf( raw_paths[i], sizeof(raw_paths[i]), "%s/%s", resolved, pal3_raw_names[i] );
+            assert( durable_write( raw_paths[i], old_contents[i], strlen(old_contents[i]) ) );
+        }
+        assert( game_profile_apply( pal3_settings, pal3_keys, &pal3, "owner/repo", "", &preserved ) == GAME_PROFILE_OK );
+        for (unsigned int i = 0; i < PAL3_RAW_COUNT; i++)
+        {
+            char digest[65];
+            assert( file_digest( raw_paths[i], digest ) && !strcmp( digest, pal3_raw_digests[i] ) );
+        }
+        assert( game_profile_restore( pal3_settings, pal3_keys ) == GAME_PROFILE_OK );
+        for (unsigned int i = 0; i < PAL3_RAW_COUNT; i++)
+        {
+            FILE *file = fopen( raw_paths[i], "rb" ); assert( file );
+            char content[64] = {0};
+            size_t size = fread( content, 1, sizeof(content), file );
+            assert( feof( file ) && !fclose( file ) );
+            assert( size == strlen(old_contents[i]) && !memcmp( content, old_contents[i], size ) );
+        }
+        assert( game_profile_apply( pal3_settings, pal3_keys, &pal3, "owner/repo", "", &preserved ) == GAME_PROFILE_OK );
+        assert( durable_write( raw_paths[0], "player edit\n", 12 ) );
+        pal3.version++;
+        assert( game_profile_apply( pal3_settings, pal3_keys, &pal3, "owner/repo", "", &preserved ) == GAME_PROFILE_OK );
+        char digest[65];
+        assert( file_digest( raw_paths[0], digest ) && !strcmp( digest, pal3_raw_digests[0] ) );
+        struct targets pal3_targets; assert( target_paths( &pal3_targets, pal3_settings, pal3_keys ) );
+        struct snapshot *pal3_before = malloc( sizeof(*pal3_before) ); assert( pal3_before );
+        assert( snapshot_capture( &pal3_targets, pal3_before ) && snapshot_write( pal3_targets.pending, pal3_before ) );
+        assert( durable_write( raw_paths[1], "broken", 6 ) );
+        assert( game_profile_recover( pal3_settings, pal3_keys ) == GAME_PROFILE_OK );
+        assert( file_digest( raw_paths[1], digest ) && !strcmp( digest, pal3_raw_digests[1] ) );
+        free( pal3_before );
+        assert( game_profile_restore( pal3_settings, pal3_keys ) == GAME_PROFILE_OK );
+        assert( !unlink( raw_paths[1] ) && !symlink( outside, raw_paths[1] ) );
+        assert( game_profile_apply( pal3_settings, pal3_keys, &pal3, "owner/repo", "", &preserved ) == GAME_PROFILE_IO );
+        FILE *file = fopen( outside, "rb" ); assert( file );
+        char sentinel[7] = {0};
+        assert( fread( sentinel, 1, 6, file ) == 6 && !fclose( file ) && !strcmp( sentinel, "secret" ) );
+        assert( !unlink( raw_paths[1] ) );
+    }
+    /* The previous eight-target snapshot must remain readable for recovery
+     * and restores created by an older NRO. */
+    {
+        struct old_header { uint32_t magic, crc, count, exists[8], sizes[8]; } old = {0};
+        char old_path[768];
+        struct snapshot *converted = malloc( sizeof(*converted) ); assert( converted );
+        old.magic = OLD_SNAPSHOT_MAGIC; old.count = 8; old.exists[0] = 1; old.sizes[0] = 8;
+        old.crc = crc32( 0, (const void *)&old.count, sizeof(old) - offsetof(struct old_header, count) );
+        old.crc = crc32( old.crc, (const void *)"title=ok", 8 );
+        snprintf( old_path, sizeof(old_path), "%s/old-profile-snapshot", resolved );
+        FILE *file = fopen( old_path, "wb" ); assert( file );
+        assert( fwrite( &old, 1, sizeof(old), file ) == sizeof(old) );
+        assert( fwrite( "title=ok", 1, 8, file ) == 8 && !fclose( file ) );
+        assert( snapshot_read( old_path, converted ) && converted->count == 8 &&
+                converted->sizes[0] == 8 && !memcmp( converted->data[0], "title=ok", 8 ) );
+        free( converted );
+    }
     profile.min_api = GAME_PROFILE_API + 1;
     assert( game_profile_apply( settings, keys, &profile, "owner/repo", "", &preserved ) == GAME_PROFILE_INCOMPATIBLE );
     game_profiles_clear( catalog ); free( catalog );

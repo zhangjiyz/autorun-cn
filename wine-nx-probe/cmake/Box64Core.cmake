@@ -124,6 +124,21 @@ function(wine_nx_add_box64_core target)
     # ARM_DYNAREC, without the x64test harness.
     set(dynarec_sources dynarec.c dynablock.c dynarec_native_functions.c dynacache_reloc.c)
     list(TRANSFORM dynarec_sources PREPEND "${root}/src/dynarec/")
+    # PAL3patch saves a live x87 frame delta in its assembly callback. The
+    # pinned Box64 dynarec has these conversions reversed: FNSAVE must encode
+    # double to 80-bit, and FRSTOR must decode 80-bit to double. Keep the
+    # vendor checkout clean and assert both original conversion sites.
+    list(REMOVE_ITEM dynarec_sources "${root}/src/dynarec/dynarec_native_functions.c")
+    file(READ "${root}/src/dynarec/dynarec_native_functions.c" native_fpu_source)
+    wine_nx_box64_patch(native_fpu_source "D2LD(&ST(i).d, p);"
+        "WINE_NX_FRSTOR_CONVERSION_PLACEHOLDER" "FRSTOR original conversion")
+    wine_nx_box64_patch(native_fpu_source "LD2D(p, &ST(i).d);"
+        "D2LD(&ST(i).d, p);" "FNSAVE double to 80-bit")
+    wine_nx_box64_patch(native_fpu_source "WINE_NX_FRSTOR_CONVERSION_PLACEHOLDER"
+        "LD2D(p, &ST(i).d);" "FRSTOR 80-bit to double")
+    set(native_fpu_generated "${CMAKE_CURRENT_BINARY_DIR}/${target}-native-fpu.c")
+    file(WRITE "${native_fpu_generated}" "${native_fpu_source}")
+    list(APPEND dynarec_sources "${native_fpu_generated}")
     # Count hash validations of translated blocks, reported by the runtime.
     list(REMOVE_ITEM dynarec_sources "${root}/src/dynarec/dynablock.c")
     file(READ "${root}/src/dynarec/dynablock.c" dynablock_source)

@@ -31,6 +31,7 @@
 #include "win32u_private.h"
 #include "wine/gdi_driver.h"
 #include "wine/nx_input_codes.h"
+#include "wine/nx_stick_run.h"
 #include "../../wine-nx-probe/source/compositor.h"
 
 /* Framebuffer hooks implemented in the runtime (wine-nx-probe/source/runtime.c). */
@@ -44,6 +45,7 @@ extern void  wine_nx_pointer_set_pos( int x, int y );
 extern void  wine_nx_pointer_follow( int x, int y );
 extern int   wine_nx_pointer_take_motion( int *dx, int *dy );
 extern int   wine_nx_pointer_take_placed( void );
+extern int   wine_nx_pointer_take_fixed_click( int *x, int *y );
 extern void  wine_nx_cursor_show( int visible );
 extern void  wine_nx_runtime_trace( const char *msg ) __attribute__((weak));
 extern int   wine_nx_runtime_verbose __attribute__((weak));
@@ -623,14 +625,33 @@ static void wine_nx_pointer_flags( unsigned int last, unsigned int held, unsigne
 #define WINE_NX_PAD_KEY_COUNT 28
 extern unsigned int wine_nx_pad_key_state __attribute__((weak));
 extern unsigned short wine_nx_pad_keys[] __attribute__((weak));
+extern int wine_nx_left_stick_double_tap_run __attribute__((weak));
 
 static BOOL wine_nx_send_keys(void)
 {
     static unsigned int delivered;
+    static struct wine_nx_stick_run stick_run;
     unsigned int held, changed, i;
+    unsigned short effective_vkeys[WINE_NX_PAD_KEY_COUNT];
+    const unsigned short *vkeys = wine_nx_pad_keys;
+    BOOL double_tap;
 
     if (!&wine_nx_pad_key_state || !wine_nx_pad_keys) return FALSE;
     held = __atomic_load_n( &wine_nx_pad_key_state, __ATOMIC_RELAXED );
+    double_tap = &wine_nx_left_stick_double_tap_run &&
+        __atomic_load_n( &wine_nx_left_stick_double_tap_run, __ATOMIC_RELAXED );
+    if (double_tap)
+    {
+        /* A left direction with no mapping normally borrows the d-pad code.
+         * Keep it on its own state bit without changing shared mappings. */
+        memcpy( effective_vkeys, wine_nx_pad_keys, sizeof(effective_vkeys) );
+        for (i = 0; i < WINE_NX_STICK_DIRECTION_COUNT; i++)
+            if (!effective_vkeys[WINE_NX_STICK_FIRST_KEY + i])
+                effective_vkeys[WINE_NX_STICK_FIRST_KEY + i] = effective_vkeys[i];
+        vkeys = effective_vkeys;
+        held = wine_nx_stick_run_keys( &stick_run, held, NtGetTickCount() );
+    }
+    else memset( &stick_run, 0, sizeof(stick_run) );
     if (!(changed = held ^ delivered)) return FALSE;
 
     for (i = 0; i < WINE_NX_PAD_KEY_COUNT; i++)
@@ -638,11 +659,20 @@ static BOOL wine_nx_send_keys(void)
         INPUT input = {0};
         UINT scan;
 
-        if (!(changed & (1u << i)) || !wine_nx_pad_keys[i] ||
-            wine_nx_pad_keys[i] >= WINE_NX_MOUSE_LEFT) continue;
+        if (!(changed & (1u << i)) || !vkeys[i] ||
+            vkeys[i] >= WINE_NX_MOUSE_LEFT) continue;
+        if (double_tap)
+        {
+            /* D-pad and stick may name the same arrow. A synthetic release
+             * must not release the arrow while the d-pad still holds it. */
+            int event = wine_nx_stick_run_key_event( delivered, held, vkeys,
+                                                      WINE_NX_PAD_KEY_COUNT, i );
+            if (event < 0) continue;
+            input.ki.dwFlags = event ? 0 : KEYEVENTF_KEYUP;
+        }
+        else input.ki.dwFlags = (held & (1u << i)) ? 0 : KEYEVENTF_KEYUP;
         input.type = INPUT_KEYBOARD;
-        input.ki.wVk = wine_nx_pad_keys[i];
-        input.ki.dwFlags = (held & (1u << i)) ? 0 : KEYEVENTF_KEYUP;
+        input.ki.wVk = vkeys[i];
         /* DirectInput names keys by scan code, and an arrow is E0 48, not 48. */
         scan = NtUserMapVirtualKeyEx( input.ki.wVk, MAPVK_VK_TO_VSC_EX, NtUserGetKeyboardLayout( 0 ) );
         scan = wine_nx_keyboard_scan( input.ki.wVk, scan );
@@ -742,10 +772,13 @@ static void wine_nx_update_cursor( void )
 BOOL wine_nx_drv_ProcessEvents( DWORD mask )
 {
     static unsigned int last_buttons;
+    static BOOL fixed_click_down;
+    static DWORD fixed_click_since;
+    static int fixed_click_x, fixed_click_y;
     unsigned int buttons, pressed, released;
     DWORD first, second;
-    BOOL moved, keys, placed, stepped;
-    int x, y, dx, dy;
+    BOOL moved, keys, placed, stepped, clicked = FALSE;
+    int x, y, dx, dy, click_x, click_y;
 
     (void)mask;
     wine_nx_fb_present();
@@ -783,13 +816,37 @@ BOOL wine_nx_drv_ProcessEvents( DWORD mask )
             wine_nx_pointer_follow( pos.x, pos.y );
         }
     }
+    /* A physical touch remains down until the next input polls. Give a fixed
+     * click the same observable down/up lifetime instead of sending both in
+     * one ProcessEvents call, which polling games can miss entirely. */
+    if (fixed_click_down)
+    {
+        if (buttons & WINE_NX_POINTER_LEFT) fixed_click_down = FALSE;
+        else if (NtGetTickCount() - fixed_click_since >= 80)
+        {
+            wine_nx_send_mouse( fixed_click_x, fixed_click_y, MOUSEEVENTF_LEFTUP );
+            fixed_click_down = FALSE;
+            clicked = TRUE;
+        }
+    }
+    else if (!(buttons & WINE_NX_POINTER_LEFT) &&
+             wine_nx_pointer_take_fixed_click( &click_x, &click_y ))
+    {
+        wine_nx_send_mouse( click_x, click_y, MOUSEEVENTF_MOVE | MOUSEEVENTF_LEFTDOWN );
+        wine_nx_pointer_follow( click_x, click_y );
+        fixed_click_x = click_x;
+        fixed_click_y = click_y;
+        fixed_click_since = NtGetTickCount();
+        fixed_click_down = TRUE;
+        clicked = TRUE;
+    }
     if (first) nxdrv_trace( "[NXINPUT] buttons=%x flags=%x,%x x=%d", buttons, first, second, x );
     else if (moved) nxdrv_trace_hot( "[NXINPUT] move x=%d y=%d buttons=%x", x, y, buttons, 0 );
     last_buttons = buttons;
     keys = wine_nx_send_keys();
     wine_nx_update_cursor();
     wine_nx_fb_present();
-    return moved || first || keys;
+    return moved || first || keys || clicked;
 }
 
 /**********************************************************************

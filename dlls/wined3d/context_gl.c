@@ -4616,6 +4616,8 @@ static GLenum gl_tfb_primitive_type_from_d3d(enum wined3d_primitive_type primiti
 void draw_primitive(struct wined3d_device *device, const struct wined3d_state *state,
         const struct wined3d_draw_parameters *parameters)
 {
+    static int pal3_skip_black_overlay = -1;
+    static LONG pal3_scene_draw_seen;
     const struct wined3d_fb_state *fb = &state->fb;
     const struct wined3d_stream_info *stream_info;
     struct wined3d_rendertarget_view *dsv, *rtv;
@@ -4623,6 +4625,7 @@ void draw_primitive(struct wined3d_device *device, const struct wined3d_state *s
     struct wined3d_context_gl *context_gl;
     struct wined3d_context *context;
     bool rasterizer_discard = false;
+    bool pal3_black_overlay = false;
     unsigned int i, idx_size = 0;
     const void *idx_data = NULL;
 
@@ -4630,6 +4633,24 @@ void draw_primitive(struct wined3d_device *device, const struct wined3d_state *s
 
     if (!parameters->indirect && !parameters->u.direct.index_count)
         return;
+
+    if (pal3_skip_black_overlay == -1)
+    {
+        const char *value = getenv("WINE_NX_PAL3_BLACK_OVERLAY_SKIP");
+        char image[MAX_PATH];
+        const char *name, *slash;
+        DWORD length;
+
+        pal3_skip_black_overlay = 0;
+        if (value && value[0] == '1' && !value[1]
+                && (length = GetModuleFileNameA(NULL, image, sizeof(image))) && length < sizeof(image))
+        {
+            name = strrchr(image, '\\');
+            slash = strrchr(image, '/');
+            if (slash && (!name || slash > name)) name = slash;
+            pal3_skip_black_overlay = !lstrcmpiA(name ? name + 1 : image, "PAL3.exe");
+        }
+    }
 
     if (!parameters->indirect)
         TRACE("base_vertex_idx %d, start_idx %u, index_count %u, start_instance %u, instance_count %u.\n",
@@ -4787,11 +4808,29 @@ void draw_primitive(struct wined3d_device *device, const struct wined3d_state *s
         checkGLcall("glTextureBarrier");
     }
 
+    if (pal3_skip_black_overlay && !parameters->indirect && parameters->indexed
+            && state->primitive_type == WINED3D_PT_TRIANGLELIST
+            && state->shader[WINED3D_SHADER_TYPE_VERTEX]
+            && state->texture_states[0][WINED3D_TSS_COLOR_OP] == WINED3D_TOP_SELECT_ARG1
+            && state->texture_states[1][WINED3D_TSS_COLOR_OP] == WINED3D_TOP_MODULATE_2X)
+        InterlockedExchange(&pal3_scene_draw_seen, TRUE);
+
+    if (pal3_skip_black_overlay && pal3_scene_draw_seen && !parameters->indirect && !parameters->indexed
+            && state->primitive_type == WINED3D_PT_TRIANGLELIST
+            && parameters->u.direct.index_count == 6
+            && state->texture_states[0][WINED3D_TSS_COLOR_OP] == WINED3D_TOP_DISABLE
+            && !state->render_states[WINED3D_RS_ALPHATESTENABLE]
+            && !state->render_states[WINED3D_RS_ALPHABLENDENABLE]
+            && fb->render_targets[0]
+            && fb->render_targets[0]->resource->width == 1280
+            && fb->render_targets[0]->resource->height == 720)
+        pal3_black_overlay = true;
+
     if (parameters->indirect)
     {
         wined3d_context_gl_draw_indirect(context_gl, state, &parameters->u.indirect, idx_size);
     }
-    else
+    else if (!pal3_black_overlay)
     {
         wined3d_context_gl_draw_primitive_arrays(context_gl, state, idx_data, idx_size,
                 parameters->u.direct.base_vertex_idx, parameters->u.direct.start_idx,

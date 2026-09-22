@@ -97,6 +97,11 @@ struct d3d9_device
     unsigned int adapter_ordinal;
     struct d3d9 *d3d_parent;
     BOOL multithreaded;
+    struct
+    {
+        BOOL enabled;
+        volatile LONG active;
+    } pal3_movie;
 
     struct fvf_declaration *fvf_decls;
     UINT fvf_decl_count, fvf_decl_size;
@@ -165,6 +170,8 @@ struct d3d9_swapchain
 
 HRESULT d3d9_swapchain_create(struct d3d9_device *device, struct wined3d_swapchain_desc *desc,
         unsigned int swap_interval, struct d3d9_swapchain **swapchain);
+void d3d9_pal3_movie_present_rects(struct d3d9_device *device, struct d3d9_swapchain *swapchain,
+        const RECT **src_rect, const RECT **dst_rect, RECT *movie_src, RECT *movie_dst);
 
 struct d3d9_surface
 {

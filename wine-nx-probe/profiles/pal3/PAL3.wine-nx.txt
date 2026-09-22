@@ -1,8 +1,12 @@
 title=仙剑奇侠传三
 d3d=wine
 wined3d-explicit-buffer-flush=0
+pal3-black-overlay-skip=1
+pal3-movie-center=1
+profile=1
 own-controls=1
 controller=keyboard
+left-stick-run=double-tap
 verbose=0
 windows=compositor
 window-fit=1

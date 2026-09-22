@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import subprocess
@@ -35,6 +36,10 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
     assert valid.read_bytes() == repeat.read_bytes(), 'profile packaging must be reproducible'
     with ZipFile(valid) as archive:
         entries = {name: archive.read(name) for name in archive.namelist()}
+    assert b'pal3patch-' not in entries['pal3/settings.txt']
+    assert 'pal3/config.ini' not in entries
+    for name in pack.PAL3_RAW_FILES:
+        assert entries[f'pal3/{name}'] == (PROBE / 'profiles/pal3' / name).read_bytes()
     bad = []
 
     def invalid(name, items):
@@ -49,6 +54,9 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
     invalid('duplicate-setting', [(name, data + b'controller=keyboard\n' if name == 'newpal-steam/settings.txt' else data) for name, data in entries.items()])
     invalid('oversized', [(name, b'#' * 8192 if name == 'newpal-steam/keys.txt' else data) for name, data in entries.items()])
     invalid('missing-file', [(name, data) for name, data in entries.items() if name != 'newpal-steam/keys.txt'])
+    invalid('missing-pal3patch', [(name, data) for name, data in entries.items() if name != 'pal3/PAL3patch.dll'])
+    invalid('changed-pal3patch', [(name, data + b'x' if name == 'pal3/PAL3patch.dll' else data) for name, data in entries.items()])
+    invalid('extra-pal3-config', list(entries.items()) + [('pal3/config.ini', b'motionblur=1\n')])
     invalid('embedded-nul', [(name, data + b'\0' if name == 'catalog.tsv' else data) for name, data in entries.items()])
     invalid('duplicate-id', [(name, data.replace(b'zhaoyunzhuan\t', b'newpal-steam\t') if name == 'catalog.tsv' else data) for name, data in entries.items()])
     link = ZipInfo('newpal-steam/keys.txt'); link.create_system = 3; link.external_attr = 0o120777 << 16
@@ -60,7 +68,10 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
     for mutator in (lambda d: d['profiles'][0].update(version=0),
                     lambda d: d['profiles'][0].update(id='../bad'),
                     lambda d: d['profiles'][0].update(name='a\tb'),
-                    lambda d: d['profiles'][0].update(settings='/tmp/arbitrary-file')):
+                    lambda d: d['profiles'][0].update(settings='/tmp/arbitrary-file'),
+                    lambda d: next(p for p in d['profiles'] if p['id'] == 'pal3').update(min_api=7),
+                    lambda d: next(p for p in d['profiles'] if p['id'] == 'pal3').update(min_api=8),
+                    lambda d: next(p for p in d['profiles'] if p['id'] == 'pal3').update(min_api=9)):
         broken = json.loads(json.dumps(data)); mutator(broken)
         fixture = maintenance / 'catalog.json'; fixture.write_text(json.dumps(broken))
         try:
@@ -81,10 +92,16 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
     # v21 packages remain readable by the new runtime.
     legacy = json.loads(json.dumps(data)); legacy['schema'] = 1
     for entry in legacy['profiles']:
-        entry.pop('cheats', None); entry.pop('cover', None); entry.pop('binary_patch', None); entry['min_api'] = 1
+        entry.pop('cheats', None); entry.pop('cover', None); entry.pop('binary_patch', None)
+        entry.pop('raw_files', None); entry['min_api'] = 1
+    legacy_keys = maintenance / 'pal3/PAL3.keys.txt'
+    current_keys = legacy_keys.read_text()
+    legacy_keys.write_text(re.sub(r'^X=click:\d+,\d+(?:,[12])?$', 'X=0x0d', current_keys,
+                                  flags=re.MULTILINE).replace('PLUS=click:1240,40', 'PLUS=0x1b'))
     (maintenance / 'catalog.json').write_text(json.dumps(legacy))
     pack.build(maintenance / 'catalog.json', root / 'legacy.zip')
     run(core, root / 'legacy.zip')
+    legacy_keys.write_text(current_keys)
 
     fixture = json.loads(json.dumps(data))
     fixture['profiles'][0]['cheats'] = 'test-cheats.json'

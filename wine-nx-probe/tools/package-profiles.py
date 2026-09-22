@@ -11,9 +11,16 @@ from urllib.parse import urlsplit
 from zipfile import ZipFile, ZipInfo, ZIP_DEFLATED
 
 PROBE = Path(__file__).resolve().parents[1]
-SETTINGS = set('title d3d d3d9 own-controls controller verbose profile window-fit sdl-audio sd-stat-cache sd-clean-writer-cache locale wined3d-renderer wined3d-frontbuffer-swap wined3d-explicit-buffer-flush wined3d-csmt '
+SETTINGS = set('title d3d d3d9 own-controls controller verbose profile window-fit sdl-audio sd-stat-cache sd-clean-writer-cache locale wined3d-renderer wined3d-frontbuffer-swap wined3d-explicit-buffer-flush wined3d-csmt pal3-black-overlay-skip pal3-movie-center '
                'aspect-fit touch-coordinates left-stick-run left-stick-eight-way left-stick-aim left-stick-move '
                'windows dxvk-version vkd3d-version dxvk-hud frame-limit vsync'.split())
+PAL3_RAW_FILES = {
+    'PAL3patch.conf': (65536, '23e43567964ff76984dee7e52b4fca6cb7c4840455cd412dafe26a42cdd98b24'),
+    'PAL3patch.dll': (2 * 1024 * 1024, '242ae1786f99e8c61bf6c8449d91ab5f30e5f81e4d602cdadb8388e26c46c385'),
+    'PAL3.dll': (65536, 'ca26da00f7081ca05b9698de55d86949fd97e92a0627e0854b291eb503fe3545'),
+}
+
+
 KEYS = set('LSTICK RSTICK DPAD TOUCH UP DOWN LEFT RIGHT LUP LDOWN LLEFT LRIGHT RUP RDOWN RLEFT RRIGHT '
            'A B X Y L R ZL ZR PLUS MINUS STICKL STICKR'.lower().split())
 
@@ -44,7 +51,15 @@ def resource(root, relative):
     return path.read_bytes()
 
 
-def defaults(root, relative, controls):
+def raw_pal3_file(root, relative, name):
+    data = resource(root, relative)
+    limit, digest = PAL3_RAW_FILES[name]
+    if not data or len(data) >= limit or hashlib.sha256(data).hexdigest() != digest:
+        raise ValueError(f'PAL3 file is not the verified 5.1 set: {name}')
+    return data
+
+
+def defaults(root, relative, allowed):
     data = resource(root, relative)
     if len(data) >= 8192 or b'\0' in data:
         raise ValueError(f'configuration too large or contains NUL: {relative}')
@@ -58,7 +73,7 @@ def defaults(root, relative, controls):
             continue
         key, separator, value = line.partition('=')
         key, value = key.strip().lower(), value.strip()
-        if not separator or key not in (KEYS if controls else SETTINGS) or key in found or not value or len(value.encode()) >= 384:
+        if not separator or key not in allowed or key in found or not value or len(value.encode()) >= 384:
             raise ValueError(f'invalid or duplicate setting in {relative}: {line}')
         if any(ord(c) < 32 for c in value):
             raise ValueError(f'control character in {relative}')
@@ -177,7 +192,7 @@ def build(catalog_path, output, selected=None):
     files, ids = {}, set()
     for entry in entries:
         required = {'id', 'name', 'version', 'min_api', 'keywords', 'description', 'settings', 'keys'}
-        optional = ({'cheats', 'cover', 'url'} if v2 else set()) | ({'binary_patch'} if v3 else set())
+        optional = ({'cheats', 'cover', 'url'} if v2 else set()) | ({'binary_patch', 'raw_files'} if v3 else set())
         if not required <= set(entry) or set(entry) - required - optional:
             raise ValueError('unexpected or missing profile fields')
         ident = field(entry['id'], 64, 'id')
@@ -190,6 +205,8 @@ def build(catalog_path, output, selected=None):
         for key in ('version', 'min_api'):
             if type(entry[key]) is not int or not 1 <= entry[key] <= 2147483647:
                 raise ValueError(f'{key} must be a positive integer')
+        if ('raw_files' in entry) != (v3 and ident == 'pal3' and entry['min_api'] >= 7):
+            raise ValueError('PAL3 API 7 requires the three patch files')
         keywords = field(entry['keywords'], 192, 'keywords')
         description = field(entry['description'], 512, 'description')
         if v2 and entry['min_api'] < 2:
@@ -208,8 +225,27 @@ def build(catalog_path, output, selected=None):
             files[f'{ident}/cover.png'] = cover(catalog_path.parent, entry['cover'])
         if 'binary_patch' in entry:
             files[f'{ident}/patch.txt'] = binary_patch(catalog_path.parent, entry['binary_patch'])
+        if 'raw_files' in entry:
+            if not isinstance(entry['raw_files'], dict) or set(entry['raw_files']) != set(PAL3_RAW_FILES):
+                raise ValueError('PAL3 raw files must be the exact supported three files')
+            for name, relative in entry['raw_files'].items():
+                files[f'{ident}/{name}'] = raw_pal3_file(catalog_path.parent, relative, name)
         for kind in ('settings', 'keys'):
-            files[f'{ident}/{kind}.txt'] = defaults(catalog_path.parent, entry[kind], kind == 'keys')
+            data = defaults(catalog_path.parent, entry[kind], KEYS if kind == 'keys' else SETTINGS)
+            if kind == 'keys':
+                for line in data.decode('utf-8').splitlines():
+                    line = line.strip()
+                    if not line or line.startswith(('#', ';')):
+                        continue
+                    key, value = (part.strip().lower() for part in line.split('=', 1))
+                    if value.startswith('click:'):
+                        match = re.fullmatch(r'click:(\d+),(\d+)(?:,[12])?', value)
+                        required_api = 10
+                        if (entry['min_api'] < required_api or key not in
+                            {'a', 'b', 'x', 'y', 'l', 'r', 'zl', 'zr', 'plus', 'minus', 'stickl', 'stickr'} or
+                            not match or int(match[1]) >= 1280 or int(match[2]) >= 720):
+                            raise ValueError('fixed clicks require a compatible API, a physical button, and 1280x720 coordinates')
+            files[f'{ident}/{kind}.txt'] = data
     if sum(len(data) for name, data in files.items() if name.endswith('/cover.png')) > 16 * 1024 * 1024:
         raise ValueError('total covers exceed 16 MiB')
     files['catalog.tsv'] = ''.join(lines).encode('utf-8')

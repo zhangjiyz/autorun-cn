@@ -4,7 +4,7 @@
 #include "launcher_settings.h"
 #include "game_cheats.h"
 
-#define GAME_PROFILE_API 5
+#define GAME_PROFILE_API 10
 #define GAME_PROFILE_COVER_MAX (2u * 1024u * 1024u)
 #define GAME_PROFILE_MAX 128
 #define GAME_PROFILE_PATCH_MAX 64
@@ -24,10 +24,12 @@ struct game_profile
     char url[768], digest[65];
     unsigned int archive_size;
     struct launcher_kv settings, keys, cheats;
+    unsigned char *raw_files[3];
+    unsigned int raw_sizes[3];
     unsigned char *cover;
     unsigned int cover_size;
     struct game_profile_patch patch;
-    int has_cheats, has_cover, has_patch;
+    int has_cheats, has_cover, has_patch, has_raw_files;
 };
 
 struct game_profile_catalog

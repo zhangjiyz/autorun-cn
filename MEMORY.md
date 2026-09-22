@@ -25,7 +25,7 @@
 ### 启动器与适配系统
 
 - 首页/库网格调整为 7 列 × 2 行，相关截图定位测试已同步。
-- 适配包 schema 为 3，运行时 `GAME_PROFILE_API` 为 5。
+- 适配包 schema 为 3，运行时 `GAME_PROFILE_API` 为 10。
 - 适配包可携带封面、按键、设置、金手指定义以及 SHA-256 限定的原生二进制补丁。
 - 应用二进制补丁前会备份匹配的 EXE；恢复适配包时同时恢复配置、按键和游戏程序。
 - 二进制补丁不执行下载脚本；哈希或原始字节不匹配时拒绝修改。
@@ -108,60 +108,15 @@ DirectDraw 证据：
 4. 检查新日志是否出现 `interval=1` 的 `[NXDDRAW]` 或 Flip 后更新。若 Flip 未出现，继续跟踪正式游戏的 Blt 分支；若 Flip 出现但画面仍旧，检查 dirty subresource 和 present 的源/目标表面关系。
 5. B 跳过路径通过后，再单独验证视频自然结束。
 
-## 仙剑奇侠传三当前诊断
+## 仙剑奇侠传三当前状态
 
-目标与设备状态：
-
-- 游戏程序是 `PAL3/PAL3.exe`，适配目录为 `wine-nx-probe/profiles/pal3/`；当前适配包版本 1、`min_api` 5。
-- 仓库适配包只分发设置、按键、封面和金手指框架，不分发游戏文件或 PAL3patch 二进制。
-- 设备游戏目录已临时从 PAL3patch 2.1 升级到官方 PAL3patch 5.1 做兼容验证；本地游戏目录仍保留 2.1，未用尚未验收的设备文件覆盖。
-- 设备 `config.ini` 当前使用 `motionblur=0`。PAL3patch 当前保持 `graphicspatch=1`、`nolockablebackbuffer=0`、`fixreset=1`、`fixui=1`、`fixtrail=1`、`uifillborder=0`。
-
-已经确认的现象与排除项：
-
-- DXVK 在 32 位 D3D9 初始化阶段以 `c0000005` 失败，因此当前使用 WineD3D。
-- `nolockablebackbuffer=0` 消除了 Bink 视频卡顿；视频目前以约 800×600 出现在左上区域，尚未恢复全屏缩放。
-- 视频结束或跳过后，加载条只前进一部分，随后画面全黑，但游戏鼠标仍能显示和操作。
-- 对本地与设备游戏目录做过递归核对：设备没有缺文件或大小不符；全部 41 个 `scene/*.cpk` 以及 `basedata`、`movie`、`music` 数据大小一致。当前黑屏不能再归因于文件缺失或截断。
-- 黑屏时抓取的 D3D9 后台缓冲为 1280×720，除鼠标附近少量像素外几乎全黑，说明问题发生在游戏绘制或 WineD3D 数据提交阶段，不是启动器合成器把正常画面遮住。
-- 最新正常运行日志没有未处理异常、GL 错误、着色器编译失败或资源打开失败。资源读取在加载结束后停止增长，但游戏继续约 60 FPS 调用 `wglSwapBuffers`、更新 shader 常量和提交映射缓冲区，因此进程没有卡死，主循环仍在持续绘制和交换。
-- `graphicspatch=0` 的单变量实验会在 `PAL3.dll+0x5762` 写访问异常崩溃，已经恢复；`motionblur=0`、`uifillborder=0` 和 `windows=framebuffer` 均未消除黑屏，framebuffer 已恢复为 compositor。
-- PAL3 自带的 `Pal3Log.txt`、`EngineLog.txt` 内容过少，PAL3patch 插件日志仍是旧版残留，不能作为当前运行证据；诊断应以本轮新生成的 `game-PAL3.log`、运行时日志和 Horizon trace 为准。
-
-当前针对性实验：
-
-- 日志显示稳定黑屏阶段每 10 秒约有 1 万次 `glFlushMappedBufferRange`。该调用来自 Switch 专用的非一致持久映射优化；结合“鼠标可见、场景全黑、主循环持续提交”的证据，当前首要验证对象是 WineD3D 映射缓冲区的显式刷新路径。
-- 主程序新增每游戏 `wined3d-explicit-buffer-flush=0|1` 和 `wined3d-csmt=0|1`。默认值仍分别为 1 和 1，其他已适配游戏保持原行为。
-- PAL3 配置目前只设置 `wined3d-explicit-buffer-flush=0`，先做单变量验证；`wined3d-csmt` 已具备但尚未对 PAL3 关闭。
-- 该版本已定向构建并通过 MTP 覆盖设备的 `switch/wine/wine-nx-runtime.nro` 与 `drive_c/PAL3/PAL3.wine-nx.txt`，读回与本地一致。设备 NRO SHA-256 为 `db435eb099fa5dbb0ca0f6c5efc3f9f9afeba1b98f8f81f285c30c93aea76f3f`。
-- 用户尚未启动并回报关闭 explicit buffer flush 后的结果，所以这仍是“已上传、未验收”的诊断版本，不能写成仙剑三已适配完成。
-
-下一步：
-
-1. 完全退出 MTP 和旧进程，重新启动 Autorun 与 PAL3。
-2. 在新日志中确认出现 `[WINED3D] profile disables explicit mapped-buffer flushes`，确保测试配置生效。
-3. 观察视频位置、视频流畅度、加载条、标题画面和鼠标；若标题画面仍黑，立即取回这一轮的新日志并比较 `glFlushMappedBufferRange` 是否消失。
-4. 若显式刷新已关闭但现象完全不变，再只对 PAL3 设置 `wined3d-csmt=0` 做第二个单变量实验，不继续改 PAL3patch 参数。
-
-## 已做与未做的验证
-
-已做：
-
-- `ddraw.dll` 的 i386 PE 定向构建通过；最新一次只重编了 `dlls/ddraw/i386-windows/ddraw.dll`。
-- 容器内 `wine-nx-probe/tests/check-game-profiles.py` 通过，覆盖适配包、封面、金手指、恢复、CNB 元数据、菜单和网络回归。
-- PAL3 WineD3D 兼容开关版本的 `wine-nx-runtime.nro` 定向构建通过；这只证明可编译和已正确上传，不代替真机画面验收。
-- `sh wine-nx-probe/check-audio.sh` 通过，覆盖 registry wire adapter、共享音频流、播放和格式转换。
-- `git diff --check`、修改 JSON、Python 和 shell 文件的语法检查通过。
-- 多轮 OpenMTP 上传、日志回收和设备现象对照。
-- 对目标 EXE 的导入、DirectDraw 调用及关键帧提交函数做了静态分析。
-- 适配系统、更新器、音频后端和打包工具已有对应主机测试改动，提交前应重新运行可承受的定向检查。
-
-尚未完成：
-
-- 本轮完整 CI（按用户要求不由适配迭代自动运行）。
-- 最新 Flip dirty 版本的 Switch 结果。
-- `Palgame.exe` 的自然视频结束、主菜单、完整输入、触屏、正式游戏帧率、存档/读档、退出/重启和持续运行验收。
-- CNB Release 附件发布；本轮“推送 CNB”仅指 Git 分支，除非用户另外明确要求创建或更新 Release。
+- 目标为 `PAL3/PAL3.exe`，适配目录为 `wine-nx-probe/profiles/pal3/`；适配包不分发游戏本体，包含经真机文件核对的 PAL3patch 5.1 三份文件。
+- 本地原游戏随附 PAL3patch 2.1；真机 DLL 为 5.1，`config.ini` 改回 `motionblur=1` 后与本机逐字节一致。
+- 真机已验证跳过黑色覆盖层后场景可见、Box64 x87 修复后剧情走到地震、视频居中，且视频结束后剧情与声音继续。
+- `pal3-black-overlay-skip=1` 与 `pal3-movie-center=1` 是独立的 PAL3 专用开关；Box64 FNSAVE/FRSTOR 转换是共享指令语义修复，保留对应回归测试。
+- `nolockablebackbuffer=0` 保持视频流畅；`profile=1` 在唯一确认片尾正常的真机组合中，暂保留于 PAL3 配置，作用尚需单变量验证。
+- PAL3 配置包直接覆盖 `PAL3patch.conf`、`PAL3patch.dll`、`PAL3.dll`，并纳入配置包备份、回滚和恢复；游戏的 `config.ini` 不带入包。启动器设置、按键、作弊和封面仍走原合并流程；当前配置包要求运行时 API 10。最初偶发启动崩溃未确认单独修复。
+- 当前源码的 NRO、D3D9 和 WineD3D DLL 已定向构建并上传真机，读回哈希一致；用户重新测试后确认仙剑三目前运行无问题。配置包安装和恢复流程尚未在真机完整验证。详情见 `wine-nx-probe/profiles/pal3/README.zh-CN.md`。
 
 ## 不应提交的本地证据
 

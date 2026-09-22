@@ -40,11 +40,16 @@
     {
       "id": "pal3",
       "name": "仙剑奇侠传三",
-      "version": 1,
-      "min_api": 5,
+      "version": 2,
+      "min_api": 10,
       "keywords": "仙剑奇侠传三 仙劍奇俠傳三 仙剑3 PAL3 Chinese Paladin 3",
-      "description": "适用于《仙剑奇侠传三》简体中文版。",
+      "description": "适用于《仙剑奇侠传三》简体中文版，包含 PAL3patch 5.1 补丁文件。",
       "settings": "pal3/PAL3.wine-nx.txt",
+      "raw_files": {
+        "PAL3patch.conf": "pal3/PAL3patch.conf",
+        "PAL3patch.dll": "pal3/PAL3patch.dll",
+        "PAL3.dll": "pal3/PAL3.dll"
+      },
       "keys": "pal3/PAL3.keys.txt",
       "cheats": "pal3/cheats.json",
       "cover": "pal3/cover.png"

@@ -255,6 +255,12 @@ static HRESULT WINAPI d3d9_surface_LockRect(IDirect3DSurface9 *iface,
     {
         locked_rect->Pitch = map_desc.row_pitch;
         locked_rect->pBits = map_desc.data;
+        if (surface->swapchain && surface->parent_device)
+        {
+            struct d3d9_device *device = impl_from_IDirect3DDevice9Ex(surface->parent_device);
+            if (device->pal3_movie.enabled)
+                InterlockedExchange(&device->pal3_movie.active, TRUE);
+        }
     }
 
     if (hr == E_INVALIDARG)
