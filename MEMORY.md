@@ -1,6 +1,6 @@
 # AutoRunNX 当前工程状态
 
-更新时间：2026-09-22。此文件记录可继续开发的事实快照，不把尚未完成的真机实验写成已支持。
+更新时间：2026-09-23。此文件记录可继续开发的事实快照，不把尚未完成的真机实验写成已支持。
 
 ## Git 与发布基线
 
@@ -117,6 +117,18 @@ DirectDraw 证据：
 - `nolockablebackbuffer=0` 保持视频流畅；`profile=1` 在唯一确认片尾正常的真机组合中，暂保留于 PAL3 配置，作用尚需单变量验证。
 - PAL3 配置包直接覆盖 `PAL3patch.conf`、`PAL3patch.dll`、`PAL3.dll`，并纳入配置包备份、回滚和恢复；游戏的 `config.ini` 不带入包。启动器设置、按键、作弊和封面仍走原合并流程；当前配置包要求运行时 API 10。最初偶发启动崩溃未确认单独修复。
 - 当前源码的 NRO、D3D9 和 WineD3D DLL 已定向构建并上传真机，读回哈希一致；用户重新测试后确认仙剑三目前运行无问题。配置包安装和恢复流程尚未在真机完整验证。详情见 `wine-nx-probe/profiles/pal3/README.zh-CN.md`。
+
+## 仙剑奇侠传四当前状态
+
+- 目标为语音版根目录 `PAL4.exe`，SHA-256 `ed168442c54f1f48332dcb25986c3de85a64c5aef423cdcc61aae2845bb8beee`；适配目录为 `wine-nx-probe/profiles/pal4/`。首版包只含 WineD3D 设置、键盘映射、空金手指列表和用户提供照片整理出的封面，不分发游戏本体、扩展 DLL、语音资源、配置或存档。
+- `profile-pal4-v1.zip` 已按当前 catalog 重新生成，SHA-256 `cf51ec21c156295dffa8487d8d3f6e251489f19589c5c58997e75573f2d4d8de`。此前版本和侧文件曾通过 MTP 上传并读回校验，但游戏仍持续黑屏，不能写成 Switch 兼容完成；当前重建包尚未重新上传真机，按键、视频、声音、场景、战斗、存档和退出均未验收。
+- 首次启动缺少 `MSVCP60.DLL`；已从用户本机仙剑三外传目录补入本机游戏和真机游戏目录，真机读回 SHA-256 `f1fd0f1a54f196b19a6f21044092c89c02353dad173c236d80f6474cb8a7ea7f`。该游戏 DLL 不在可分发适配包中。
+- 将设备误用的 DXVK 配置改回 WineD3D 后仍黑屏。完整 Miles 插件目录可走到 `auAudioMgr initializing begin...`，随后插件代码映射失败；精简插件、替换仙剑三的 Miles 6.1c 主库和多轮局部代码别名修正均未解决，且部分启动会更早发生 `c0000005`。
+- 固定地址取证确认，PAL4 有时把 Wine 认为空闲、但实际被 NRO 原生代码、共享页或后建线程栈占用的低地址当作候选，造成同一 `MEM_RESERVE` 循环数十万至数百万次。PAL4 专用 native guard 实验能在部分启动中避开这类循环并到达音频阶段，但复跑仍可能被后建线程栈阻塞，尚不适合并入运行时。
+- 最近一次进入音频阶段时，`Mssa3d2.m3d` 申请约 24 KiB 代码别名，在多个内核空闲地址调用 `svcMapProcessCodeMemory` 均返回 `0xce01`。libnx 将其定义为 `KernelError_ResourceExhausted`；日志中的 `0xd401` 则是 `KernelError_InvalidMemoryState`，不能混为一谈。Wine 当时约有 6270 个低 4 GiB 视图，内核仍报告数百 MB 连续空闲，因此当前重点是映射资源或别名生命周期，而非单纯虚拟地址容量。
+- 2026-09-23 停止实验时，真机活动 NRO 和 `PAL4.wine-nx.txt` 已恢复为实验前文件并读回逐字节一致，SHA-256 分别为 `af291db196ed93e8c78e6c97bd3857ed9afb63713b4dd7acc8cebebe9a879e32` 和 `c6509d4e8c5b412c3a78af2c725bbac50d6079c7a77e236db298d8bd9ff83e56`。测试 NRO/配置在设备上以 `.failed-pal4-*` 名称留档；运行时代码实验已从工作区撤回。
+- 仓库外证据位于 `/Users/luoqi/Documents/Project/Tools/Autorun/diagnostics/pal4-*-20260923/`。最后的源码补丁和 134 MB 构建目录在 `diagnostics/pal4-dynamicguard-20260923/`。详细时间线见 `wine-nx-probe/profiles/pal4/README.zh-CN.md`。
+- 下次从测量音频插件加载前后的内核映射块、代码别名数量和释放路径开始，确认 `ResourceExhausted` 对应的具体资源及是否存在未释放映射；不要继续换 Miles DLL、删除插件或增加固定地址特判。
 
 ## 不应提交的本地证据
 

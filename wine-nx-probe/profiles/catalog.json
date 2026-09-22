@@ -67,6 +67,18 @@
       "cover": "pal3a/cover.png"
     },
     {
+      "id": "pal4",
+      "name": "仙剑奇侠传四（语音版）",
+      "version": 1,
+      "min_api": 5,
+      "keywords": "仙剑奇侠传四 仙劍奇俠傳四 仙剑4 PAL4 Chinese Paladin 4",
+      "description": "适用于根目录 PAL4.exe 的语音版实验配置；保留游戏原有扩展 DLL 与语音资源，当前 Switch 真机仍会黑屏。",
+      "settings": "pal4/PAL4.wine-nx.txt",
+      "keys": "pal4/PAL4.keys.txt",
+      "cheats": "pal4/cheats.json",
+      "cover": "pal4/cover.png"
+    },
+    {
       "id": "zhaoyunzhuan",
       "name": "三国赵云传1",
       "version": 1,
