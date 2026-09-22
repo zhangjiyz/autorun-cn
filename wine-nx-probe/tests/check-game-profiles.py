@@ -40,6 +40,11 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
     assert 'pal3/config.ini' not in entries
     for name in pack.PAL3_RAW_FILES:
         assert entries[f'pal3/{name}'] == (PROBE / 'profiles/pal3' / name).read_bytes()
+    assert b'pal3-black-overlay-skip' not in entries['pal3a/settings.txt']
+    assert b'pal3-movie-center' not in entries['pal3a/settings.txt']
+    assert not any(name.startswith('pal3a/') and name.endswith(('.dll', '.conf')) for name in entries)
+    assert b'click:' not in entries['pal3a/keys.txt']
+    assert entries['pal3a/cover.png'] == (PROBE / 'profiles/pal3a/cover.png').read_bytes()
     bad = []
 
     def invalid(name, items):

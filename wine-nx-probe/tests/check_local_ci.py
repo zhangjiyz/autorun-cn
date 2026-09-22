@@ -43,6 +43,8 @@ with tempfile.TemporaryDirectory(prefix='autorun-ci-profiles-') as directory:
     index = release / 'autorun-profiles.tsv'
     packager.build_release(ci.PROBE / 'profiles/catalog.json', release)
     expected = ci.verify_profiles(index)
+    versions = {entry['id']: entry['version'] for entry in json.loads((ci.PROBE / 'profiles/catalog.json').read_text())['profiles']}
+    assert {entry['id']: entry['version'] for entry in expected} == versions
     original = index.read_bytes()
     assets = {p.name: p.read_bytes() for p in release.glob('*.zip')}
     fields = original.decode().splitlines()[1].split('\t')
@@ -89,6 +91,23 @@ with tempfile.TemporaryDirectory(prefix='autorun-ci-profiles-') as directory:
         lines[1] = '\t'.join(changed)
         index.write_text('\n'.join(lines) + '\n')
 
+    def missing_pal3_patch():
+        path = release / 'profile-pal3-v2.zip'
+        with ZipFile(path) as archive:
+            content = {e.filename: archive.read(e) for e in archive.infolist()}
+        del content['pal3/PAL3patch.dll']
+        with ZipFile(path, 'w') as archive:
+            for name, data in content.items():
+                archive.writestr(name, data)
+        lines = original.decode().splitlines()
+        for i, line in enumerate(lines):
+            if line.startswith('pal3\t'):
+                fields = line.split('\t')
+                fields[7:9] = [ci.sha256(path), str(path.stat().st_size)]
+                lines[i] = '\t'.join(fields)
+                break
+        index.write_text('\n'.join(lines) + '\n')
+
     reject_profile(lambda: index.write_text('autorun-profile-index-v1\n'))
     reject_profile(lambda: index.write_bytes(original.replace(b'index-v1', b'index-v9')))
     reject_profile(lambda: index.write_bytes(original + original.splitlines(keepends=True)[1]))
@@ -101,6 +120,7 @@ with tempfile.TemporaryDirectory(prefix='autorun-ci-profiles-') as directory:
     reject_profile(lambda: (release / 'autorun-profiles.zip').write_bytes(b'legacy aggregate'))
     for kind in ('metadata', 'multiple', 'missing', 'path'):
         reject_profile(lambda k=kind: corrupt_archive(k))
+    reject_profile(missing_pal3_patch)
 
 print('PASS: split profile index, exact asset set, SHA/size, single-game metadata and file boundaries')
 

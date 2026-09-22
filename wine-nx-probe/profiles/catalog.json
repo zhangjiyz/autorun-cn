@@ -55,6 +55,18 @@
       "cover": "pal3/cover.png"
     },
     {
+      "id": "pal3a",
+      "name": "仙剑奇侠传三外传·问情篇",
+      "version": 1,
+      "min_api": 5,
+      "keywords": "仙剑三外传 仙劍三外傳 问情篇 問情篇 PAL3A Chinese Paladin 3 Plus",
+      "description": "适用于根目录 PAL3A.exe 的简体中文版首轮测试；沿用游戏目录自带的 PAL3Apatch，不包含仙剑三补丁文件。",
+      "settings": "pal3a/PAL3A.wine-nx.txt",
+      "keys": "pal3a/PAL3A.keys.txt",
+      "cheats": "pal3a/cheats.json",
+      "cover": "pal3a/cover.png"
+    },
+    {
       "id": "zhaoyunzhuan",
       "name": "三国赵云传1",
       "version": 1,

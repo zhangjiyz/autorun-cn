@@ -108,19 +108,21 @@ def verify_profiles(index):
             if len(catalog) != 2 or catalog[0] not in ('autorun-profiles-v1', 'autorun-profiles-v2', 'autorun-profiles-v3'):
                 raise ValueError(f'Profile ZIP must contain exactly one game: {filename}')
             columns = catalog[1].split('\t')
-            version = int(catalog[0][-1])
-            if len(columns) != (9 if version == 3 else 8 if version == 2 else 6) or columns[:6] != fields[:6]:
+            schema_version = int(catalog[0][-1])
+            if len(columns) != (9 if schema_version == 3 else 8 if schema_version == 2 else 6) or columns[:6] != fields[:6]:
                 raise ValueError(f'Profile ZIP metadata differs from index: {filename}')
             expected = {'catalog.tsv', f'{ident}/settings.txt', f'{ident}/keys.txt'}
-            if version >= 2:
+            if schema_version >= 2:
                 if int(api) < 2 or any(flag not in ('0', '1') for flag in columns[6:]):
                     raise ValueError(f'Invalid profile feature flags: {filename}')
-                resources = ('cheats.txt', 'cover.png', 'patch.txt') if version == 3 else ('cheats.txt', 'cover.png')
-                if version == 3 and columns[8] == '1' and int(api) < 3:
+                resources = ('cheats.txt', 'cover.png', 'patch.txt') if schema_version == 3 else ('cheats.txt', 'cover.png')
+                if schema_version == 3 and columns[8] == '1' and int(api) < 3:
                     raise ValueError(f'Binary patch requires profile API 3: {filename}')
                 for flag, resource in zip(columns[6:], resources):
                     if flag == '1':
                         expected.add(f'{ident}/{resource}')
+            if schema_version == 3 and ident == 'pal3' and int(api) >= 7:
+                expected.update(f'pal3/{name}' for name in ('PAL3patch.conf', 'PAL3patch.dll', 'PAL3.dll'))
             if len(entries) != len(expected) or {e.filename for e in entries} != expected:
                 raise ValueError(f'Unexpected/missing/duplicate profile files: {filename}')
         profiles.append({'id': ident, 'name': name, 'version': int(version), 'min_api': int(api),

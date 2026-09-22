@@ -1,0 +1,11 @@
+title=仙剑奇侠传三外传·问情篇
+d3d=wine
+own-controls=1
+controller=keyboard
+left-stick-run=double-tap
+verbose=0
+windows=compositor
+window-fit=1
+sd-stat-cache=1
+sd-clean-writer-cache=1
+locale=zh_CN.UTF-8
