@@ -700,6 +700,10 @@ set_source_files_properties(source/forwarder.c PROPERTIES COMPILE_OPTIONS "-std=
 set_source_files_properties(source/audio_unix.c source/xinput_unix.c PROPERTIES COMPILE_DEFINITIONS WINE_UNIX_LIB)
 target_include_directories(wine-nx-runtime PRIVATE "${WINE_NX_PE_BUILD_DIR}/include")
 find_package(Git QUIET)
+# Keep the in-app version fallback aligned with the NACP metadata.
+set(AUTORUN_UPSTREAM_VERSION "0.0.1")
+set(AUTORUN_CN_REVISION "1")
+set(AUTORUN_DISPLAY_VERSION "${AUTORUN_UPSTREAM_VERSION}.${AUTORUN_CN_REVISION}")
 set(AUTORUN_BUILD_TAG "")
 set(AUTORUN_BUILD_EPOCH 0)
 if(GIT_FOUND)
@@ -730,6 +734,14 @@ if(GIT_FOUND)
         set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
             "${AUTORUN_GIT_REF_PATH}")
     endif()
+endif()
+if(AUTORUN_RELEASE_TAG_OVERRIDE)
+    string(LENGTH "${AUTORUN_RELEASE_TAG_OVERRIDE}" AUTORUN_RELEASE_TAG_LENGTH)
+    if(AUTORUN_RELEASE_TAG_LENGTH GREATER 100 OR
+       NOT AUTORUN_RELEASE_TAG_OVERRIDE MATCHES "^[A-Za-z0-9_-]([A-Za-z0-9_.-]*[A-Za-z0-9_-])?$")
+        message(FATAL_ERROR "Invalid AUTORUN_RELEASE_TAG_OVERRIDE")
+    endif()
+    set(AUTORUN_BUILD_TAG "${AUTORUN_RELEASE_TAG_OVERRIDE}")
 endif()
 if(NOT AUTORUN_BUILD_EPOCH MATCHES "^[0-9]+$")
     set(AUTORUN_BUILD_EPOCH 0)
@@ -909,7 +921,7 @@ find_library(SWITCH_SDL2_TTF SDL2_ttf HINTS "$ENV{DEVKITPRO}/portlibs/switch/lib
 set_source_files_properties(source/launcher.c source/launcher_catalog.c source/launcher_ui.c source/launcher_update.c source/launcher_profiles.c source/launcher_cheats.c source/steamgriddb.c source/dxvk_releases.c PROPERTIES
     INCLUDE_DIRECTORIES "$ENV{DEVKITPRO}/portlibs/switch/include/SDL2"
     COMPILE_DEFINITIONS _REENTRANT)
-set_property(SOURCE source/launcher_update.c APPEND PROPERTY COMPILE_DEFINITIONS WINE_NX_BUILD_VERSION)
+set_property(SOURCE source/launcher.c source/launcher_update.c APPEND PROPERTY COMPILE_DEFINITIONS WINE_NX_BUILD_VERSION)
 # The mark in the corner is only there in the build that generates it.
 set_property(SOURCE source/launcher.c APPEND PROPERTY COMPILE_DEFINITIONS WINE_NX_HAS_EMBEDDED_LOGO)
 target_link_libraries(wine-nx-runtime PRIVATE
@@ -1045,8 +1057,6 @@ if(NACPTOOL AND ELF2NRO)
     add_custom_target(wine-nx-ntdll-file-smoke-nro ALL DEPENDS "${NTDLL_FILE_SMOKE_NRO_FILE}")
 
     # Keep the first three components aligned with upstream Autorun's NACP version.
-    set(AUTORUN_UPSTREAM_VERSION "0.0.1")
-    set(AUTORUN_CN_REVISION "1")
     add_custom_command(
         OUTPUT "${RUNTIME_NACP_FILE}"
         COMMAND "${NACPTOOL}" --create "Autorun" "cn by zhangjiyz"

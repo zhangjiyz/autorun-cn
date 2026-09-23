@@ -14,6 +14,7 @@
 #else
 #define AUTORUN_BUILD_TAG ""
 #define AUTORUN_BUILD_EPOCH 0
+#define AUTORUN_DISPLAY_VERSION ""
 #endif
 
 struct launcher_update
@@ -62,6 +63,11 @@ static int new_release( const struct launcher_update *u )
 #else
     uint64_t published = published_time( u->release.published );
     if (!strcmp( u->release.tag, AUTORUN_BUILD_TAG ) || !strcmp( u->release.tag, u->installed )) return 0;
+    /* Packages copied to the SD card have no installed-release marker. Older
+     * packages also predate the explicit build tag, but still carry NACP's
+     * user-facing version. Treat that matching version as already installed. */
+    if (!AUTORUN_BUILD_TAG[0] && !u->installed[0] &&
+        !strcmp( u->release.tag, AUTORUN_DISPLAY_VERSION )) return 0;
     const uint64_t built = AUTORUN_BUILD_EPOCH;
     if (!built) return 0;
     return published > built;
@@ -313,6 +319,7 @@ void launcher_update_open( struct launcher_update *u )
     struct ui_input input;
     struct note_line *lines;
     int count = 0, revision = -1, top = 0;
+    int up_to_date = 0;
     float scroll = 0;
     if (!u) return;
     if (!(lines = calloc( sizeof(u->release.notes), sizeof(*lines) ))) return;
@@ -324,6 +331,11 @@ void launcher_update_open( struct launcher_update *u )
     {
         launcher_update_tick( u );
         if (u->completed) break;
+        if (u->ready && !u->job && !u->error && !u->available)
+        {
+            up_to_date = 1;
+            goto done;
+        }
         if (u->ready && revision != u->revision)
         {
             count = note_lines( u->ui, u->release.notes, lines, sizeof(u->release.notes) );
@@ -371,6 +383,7 @@ void launcher_update_open( struct launcher_update *u )
 done:
     ui_progress_end( u->ui );
     free( lines );
+    if (up_to_date) ui_toast( u->ui, "Up to date", 3000 );
     if (u->completed)
     {
         if (!u->restart || !u->restart()) ui_message( u->ui, "Update installed", "Close and reopen Autorun to use the new version." );

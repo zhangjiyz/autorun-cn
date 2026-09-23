@@ -90,7 +90,7 @@ dist/local-ci/时间戳-随机后缀/
 
 ```sh
 # 与主程序一起放在最新正式 Release
-./local-ci.sh all --profile-repository PalmMuse/autorun-cn
+./local-ci.sh all --runtime-release-tag <发布标签> --profile-repository PalmMuse/autorun-cn
 
 # 使用固定测试标签；主程序和适配包都从该标签更新
 ./local-ci.sh all --build-type Debug --profile-tag profile-test-001
@@ -137,7 +137,8 @@ Debug 构建读取 `--profile-tag` 指定的准确标签，并允许该 Release 
 测试 Release 可以标为预发布。第一次需手动安装这次生成的 `autorun.zip`；启动后，主程序更新和管理表都会固定读取这个标签。
 以后可删除并替换同标签下的附件：主程序更新页会一直提供手动安装，单游戏“适配包更新 → 选择 / 更换适配包”也允许重装同版本。
 Debug 不会因为固定测试标签在每次启动时弹出主程序更新提醒。
-发布时执行 `./local-ci.sh all --build-type Release`，安装正式 `autorun.zip` 后地址自动切回正式来源。
+发布时执行 `./local-ci.sh all --build-type Release --runtime-release-tag <即将发布的标签>`，安装正式 `autorun.zip` 后地址自动切回正式来源。
+构建时必须先确定主程序 Release 标签。该标签会编入 NRO；手动解压正式包后，主程序据此识别同标签 Release，避免把刚安装的包再次提示为更新。`--profile-tag` 只控制适配包来源，不能替代 `--runtime-release-tag`。
 来源切换后，已绑定游戏不会自动跨来源更新；需要在单游戏菜单中重新选择对应来源的适配包。
 更换来源会按首次应用处理并备份原配置；建议在测试游戏副本上操作。
 正式发布的附件不要覆盖；固定测试标签可按需替换附件。不要把测试 Release 设为 Latest。

@@ -63,6 +63,8 @@ void launcher_update_tick( void *update ) { (void)update; }
 void launcher_update_open( struct launcher_update *update ) { (void)update; }
 void launcher_update_destroy( struct launcher_update *update ) { (void)update; }
 int autorun_install_finish( const char *root ) { (void)root; return 1; }
+int autorun_installed_release( const char *root, char *tag, size_t size )
+{ (void)root; if (size) tag[0] = 0; return 0; }
 
 int launcher_platform_font( const void **data, size_t *size )
 {

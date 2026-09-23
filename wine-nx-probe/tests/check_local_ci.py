@@ -37,6 +37,9 @@ print('PASS: launcher translations are unique, strcmp-sorted and include the upd
 assert '标签 profile-test-001' in ci.runtime_update_note('Debug', 'profile-test-001')
 assert '可使用预发布' in ci.runtime_update_note('Debug', 'profile-test-001')
 assert '最新正式 Release' in ci.runtime_update_note('Release', '')
+missing_tag = subprocess.run([sys.executable, str(ci.PROBE / 'tools/local-ci.py'), 'all', '--build-type', 'Release'],
+                             capture_output=True, text=True)
+assert missing_tag.returncode != 0 and '--runtime-release-tag' in missing_tag.stderr
 
 with tempfile.TemporaryDirectory(prefix='autorun-ci-profiles-') as directory:
     release = Path(directory)
@@ -128,7 +131,7 @@ with tempfile.TemporaryDirectory() as directory:
     root = Path(directory)
     profiles = root / 'autorun-profiles.tsv'
     profiles.write_bytes(b'autorun-profile-index-v1\n')
-    files = {'wine-nx-runtime.nro': bytes(16) + b'NRO0',
+    files = {'wine-nx-runtime.nro': bytes(16) + b'NRO0\0release-1\0',
              'profiles/autorun-profiles.tsv': profiles.read_bytes(),
              'drive_c/dxvk/d3d9.dll': b'x86 fixture', 'drive_c/dxvk64/d3d9.dll': b'x64 fixture'}
     manifest = {'wine': 'abc', 'features': dict.fromkeys(('amd64', 'dynarec', 'vulkan', 'dxvk', 'vkd3d', 'lsfg', 'x86_dxvk'), True),
@@ -149,7 +152,13 @@ with tempfile.TemporaryDirectory() as directory:
             return
         raise AssertionError('invalid runtime accepted')
 
-    assert ci.verify_runtime(archive(files, manifest), profiles, 'abc') == manifest
+    assert ci.verify_runtime(archive(files, manifest), profiles, 'abc', release_tag='release-1') == manifest
+    try:
+        ci.verify_runtime(archive(files, manifest), profiles, 'abc', release_tag='release-2')
+    except ValueError:
+        pass
+    else:
+        raise AssertionError('mismatched runtime release tag accepted')
     for name in ('profiles/autorun-profiles.zip', 'profiles/profile-old-v1.zip'):
         bundled = files | {name: b'unwanted archive'}
         reject(bundled, manifest | {'files': {n: hashlib.sha256(d).hexdigest() for n, d in bundled.items()}})
@@ -183,7 +192,7 @@ with tempfile.TemporaryDirectory(prefix='autorun-ci-package-') as directory:
     subprocess.run(['git', '-C', str(repo), '-c', 'user.name=CI fixture', '-c', 'user.email=ci@example.invalid',
                     'commit', '-q', '--allow-empty', '-m', 'fixture'], check=True)
     commit = subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip()
-    payload = {'wine-nx-runtime.nro': bytes(16) + b'NRO0\0nx-amd64-box64-1\0' +
+    payload = {'wine-nx-runtime.nro': bytes(16) + b'NRO0\0nx-amd64-box64-1\0release-1\0' +
                ci.profile_index_url('example/autorun', 'profiles').encode() + b'\0' +
                ci.profile_index_url(ci.default_repository(), '').encode() + b'\0',
                'drive_c/windows/system32/winebox64ec.dll': b'fixture',
@@ -221,7 +230,7 @@ with tempfile.TemporaryDirectory(prefix='autorun-ci-package-') as directory:
                     '--repository', 'example/autorun', '--release-tag', 'profiles'], check=True)
     archive = probe / 'build-switch-wow64-dynarec/autorun-cn-main_cn-1.zip'
     assert len(ci.verify_profiles(profiles)) == len(json.loads((probe / 'profiles/catalog.json').read_text())['profiles'])
-    result = ci.verify_runtime(archive, profiles, commit, ci.profile_index_url('example/autorun', 'profiles'))
+    result = ci.verify_runtime(archive, profiles, commit, ci.profile_index_url('example/autorun', 'profiles'), 'release-1')
     assert result['x86_dxvk']['architecture'] == 'x86'
     with ZipFile(archive) as output:
         assert output.read('switch/wine/profile-updates.txt') == b'index-url=https://cnb.cool/example/autorun/-/releases/download/profiles/autorun-profiles.tsv\nauto-update=1\nbuild-index-url=https://cnb.cool/example/autorun/-/releases/download/profiles/autorun-profiles.tsv\n'

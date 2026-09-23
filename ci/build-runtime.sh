@@ -7,6 +7,11 @@ build_type="${AUTORUN_BUILD_TYPE:-Release}"
 case "$build_type" in Debug|Release) ;; *) echo "Unsupported build type: $build_type" >&2; exit 1 ;; esac
 profile_repo="${AUTORUN_PROFILE_REPOSITORY-PalmMuse/autorun-cn}"
 profile_tag="${AUTORUN_PROFILE_TAG:-}"
+release_tag="${AUTORUN_RELEASE_TAG:-}"
+if [ "$build_type" = Release ] && [ -z "$release_tag" ]; then
+    echo 'Release builds require AUTORUN_RELEASE_TAG' >&2
+    exit 1
+fi
 if [ "$build_type" = Debug ] && [ -z "$profile_tag" ]; then profile_tag=profile-debug; fi
 runtime_tag=
 if [ "$build_type" = Debug ]; then runtime_tag="$profile_tag"; fi
@@ -46,7 +51,11 @@ cmake -S "$probe" -B "$runtime" -G Ninja \
     -DWINE_NX_MESA_SWITCH_DIR="$mesa" -DWINE_NX_USB_STORAGE=ON \
     -DWINE_NX_LSFG=ON -DCMAKE_BUILD_TYPE="$build_type" \
     -DAUTORUN_PROFILE_INDEX_URL_OVERRIDE="$profile_url" \
+    -DAUTORUN_RELEASE_TAG_OVERRIDE="$release_tag" \
     -DAUTORUN_RUNTIME_RELEASE_TAG_OVERRIDE="$runtime_tag"
+if [ "$build_type" = Release ]; then
+    grep -Fqx "#define AUTORUN_BUILD_TAG \"$release_tag\"" "$runtime/autorun_version.h"
+fi
 cmake --build "$runtime" --target wine-nx-runtime-nro -j "$jobs"
 python3 "$probe/tools/build-dxvk.py" --build "$out/dxvk-amd64" --jobs "$jobs"
 python3 "$probe/tools/build-dxvk.py" --arch x86 --build "$out/dxvk-x86" --jobs "$jobs"

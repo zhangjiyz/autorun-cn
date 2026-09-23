@@ -50,6 +50,13 @@
 #include "dxvk_releases.h"
 #include "box64_options.h"
 
+#ifdef WINE_NX_BUILD_VERSION
+#include "autorun_version.h"
+#else
+#define AUTORUN_BUILD_TAG ""
+#define AUTORUN_DISPLAY_VERSION "Unknown"
+#endif
+
 #define ICON_SIDE      128    /* icons are decoded no larger than this */
 #define ICON_TEXTURES  48     /* a screenful, the row below it and the backdrop, at 1 MiB each */
 #define ICON_JOBS      64
@@ -2846,7 +2853,7 @@ enum settings_row
 {
     SET_HIDDEN, SET_HIDE_MISSING, SET_DXVK_ON_ADD, SET_VERBOSE, SET_PROFILE, SET_WINDOWS,
     SET_CONTROLS, SET_STEAMGRIDDB,
-    SET_UPDATE, SET_PROFILE_INDEX, SET_REOPEN, SET_FORWARDER, SET_MAKE_32BIT, SET_MAKE_MAIN,
+    SET_VERSION, SET_UPDATE, SET_PROFILE_INDEX, SET_REOPEN, SET_FORWARDER, SET_MAKE_32BIT, SET_MAKE_MAIN,
     SET_CREDITS, SETTINGS_ROWS
 };
 
@@ -3255,6 +3262,9 @@ static void settings_menu( struct launcher *l )
     struct ui_list list = {0};
     struct ui *ui = &l->ui;
     char path[512];
+    char installed_tag[64] = "";
+
+    autorun_installed_release( l->options->runtime_dir, installed_tag, sizeof(installed_tag) );
 
     for (;;)
     {
@@ -3269,6 +3279,7 @@ static void settings_menu( struct launcher *l )
             [SET_WINDOWS] = SET_SECTION_DEFAULTS, [SET_CONTROLS] = SET_SECTION_DEFAULTS,
             [SET_STEAMGRIDDB] = SET_SECTION_ARTWORK,
             [SET_REOPEN] = SET_SECTION_SYSTEM,
+            [SET_VERSION] = SET_SECTION_SYSTEM,
             [SET_UPDATE] = SET_SECTION_SYSTEM,
             [SET_PROFILE_INDEX] = SET_SECTION_SYSTEM,
             [SET_FORWARDER] = SET_SECTION_SYSTEM, [SET_MAKE_32BIT] = SET_SECTION_SYSTEM,
@@ -3326,6 +3337,13 @@ static void settings_menu( struct launcher *l )
                   launcher_kv_get( &l->look, "steamgriddb-key", path, sizeof(path) ) && path[0] ? "Configured" : "Not set" );
         rows[SET_STEAMGRIDDB].help = "Used to automatically download the community's highest-rated square, portrait and hero artwork.";
         rows[SET_STEAMGRIDDB].adjustable = 0;
+        snprintf( rows[SET_VERSION].label, sizeof(rows[0].label), "Autorun version" );
+        snprintf( rows[SET_VERSION].value, sizeof(rows[0].value), "%s",
+                  AUTORUN_BUILD_TAG[0] ? AUTORUN_BUILD_TAG :
+                  installed_tag[0] ? installed_tag : AUTORUN_DISPLAY_VERSION );
+        rows[SET_VERSION].kind = UI_ROW_INFO;
+        rows[SET_VERSION].adjustable = 0;
+        rows[SET_VERSION].help = "Current main program version. Check for update shows the online release.";
         snprintf( rows[SET_UPDATE].label, sizeof(rows[0].label), "Check for update" );
         rows[SET_UPDATE].kind = UI_ROW_ACTION;
         rows[SET_UPDATE].adjustable = 0;

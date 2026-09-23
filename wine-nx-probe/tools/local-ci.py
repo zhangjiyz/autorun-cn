@@ -135,7 +135,7 @@ def verify_profiles(index):
     return profiles
 
 
-def verify_runtime(path, profiles, commit, index_url=None):
+def verify_runtime(path, profiles, commit, index_url=None, release_tag=None):
     with ZipFile(path) as archive:
         if archive.testzip():
             raise ValueError('Runtime ZIP CRC validation failed')
@@ -165,6 +165,8 @@ def verify_runtime(path, profiles, commit, index_url=None):
         nro = archive.read(prefix + 'wine-nx-runtime.nro')
         if nro[16:20] != b'NRO0':
             raise ValueError('Invalid NRO header')
+        if release_tag and release_tag.encode() + b'\0' not in nro:
+            raise ValueError('Runtime NRO does not contain the release tag')
         if index_url and index_url.encode() not in nro:
             raise ValueError('Runtime NRO does not contain the configured profile source')
         if archive.read(prefix + 'profiles/autorun-profiles.tsv') != profiles.read_bytes():
@@ -215,6 +217,7 @@ class Pipeline:
                  '-e', f'WINE_NX_JOBS={self.args.jobs}',
                  '-e', f'AUTORUN_PROFILE_REPOSITORY={self.args.profile_repository}',
                  '-e', f'AUTORUN_PROFILE_TAG={self.args.profile_tag}',
+                 '-e', f'AUTORUN_RELEASE_TAG={self.args.runtime_release_tag}',
                  '-e', f'AUTORUN_BUILD_TYPE={self.args.build_type}',
                  '-e', 'UBSAN_OPTIONS=halt_on_error=1', '-e', 'SDL_VIDEODRIVER=dummy',
                  image, *command)
@@ -263,6 +266,7 @@ def main():
                         help='Debug uses the profile-debug test Release by default; Release uses latest')
     parser.add_argument('--profile-repository', default=default_repository(), help='CNB group/repo; empty selects offline catalog')
     parser.add_argument('--profile-tag', default='', help='Fixed profile Release tag; empty uses latest stable Release')
+    parser.add_argument('--runtime-release-tag', default='', help='Release tag embedded in a manually installed main program')
     parser.add_argument('--rebuild-mesa', action='store_true')
     parser.add_argument('--output', type=Path, help='New run directory; must not already exist')
     parser.add_argument('--plan', action='store_true', help='Print the pipeline without Docker, builds or file changes')
@@ -274,10 +278,16 @@ def main():
         parser.error('--profile-repository must be owner/repo')
     if args.profile_tag and not re.fullmatch(component, args.profile_tag):
         parser.error('Invalid --profile-tag')
+    if args.runtime_release_tag and not re.fullmatch(component, args.runtime_release_tag):
+        parser.error('Invalid --runtime-release-tag')
+    if args.build_type == 'Debug' and args.runtime_release_tag:
+        parser.error('--runtime-release-tag is for Release builds only')
+    if args.mode == 'all' and args.build_type == 'Release' and not args.runtime_release_tag and not args.plan:
+        parser.error('Release packages require --runtime-release-tag to avoid offering the same release after manual installation')
     if args.build_type == 'Debug' and not args.profile_tag:
         args.profile_tag = 'profile-debug'
     if args.plan:
-        print(f'Mode: {args.mode}; build type: {args.build_type}; jobs: {args.jobs}; profile source: {args.profile_repository or "offline"}; tag: {args.profile_tag or "latest"}')
+        print(f'Mode: {args.mode}; build type: {args.build_type}; jobs: {args.jobs}; profile source: {args.profile_repository or "offline"}; tag: {args.profile_tag or "latest"}; runtime release: {args.runtime_release_tag or "unset"}')
         print('Prepare Docker image -> profile transaction/menu tests -> DXVK/package tests')
         if args.mode == 'all':
             print('Verify/build Mesa -> build NRO + matching Wine DLLs + x86/AMD64 DXVK + VKD3D -> package autorun.zip')
@@ -324,6 +334,7 @@ def main():
         metadata = {'mode': args.mode, 'build_type': args.build_type, 'built_at': datetime.now(timezone.utc).isoformat(),
                     'source': before, 'container': capture('docker', 'image', 'inspect', image, '--format', '{{.Id}}'),
                     'profile_repository': args.profile_repository, 'profile_tag': args.profile_tag,
+                    'runtime_release_tag': args.runtime_release_tag,
                     'profile_index_url': profile_index_url(args.profile_repository, args.profile_tag),
                     'validation': 'Host regression tests and package integrity only; Switch acceptance is separate.'}
         if args.mode == 'all':
@@ -339,7 +350,7 @@ def main():
             metadata['profiles'] = verify_profiles(pending / 'autorun-profiles.tsv')
             if args.mode == 'all':
                 metadata['runtime'] = verify_runtime(pending / 'autorun.zip', pending / 'autorun-profiles.tsv',
-                                                     before['commit'], metadata['profile_index_url'])
+                                                     before['commit'], metadata['profile_index_url'], args.runtime_release_tag)
         after = source_state()
         if after != before:
             changed = sorted(name for name in before['files'].keys() | after['files'].keys()
