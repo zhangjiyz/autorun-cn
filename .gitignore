@@ -22,7 +22,7 @@ wine-nx-probe/build-switch-wow64/
 
 debug
 
-# Local CI caches and versioned release output.
+# Local CI caches and generated release output.
 /wine-nx-probe/build-local-ci/
 /wine-nx-probe/build-dxvk-x86/
-/dist/local-ci/
+/dist/
