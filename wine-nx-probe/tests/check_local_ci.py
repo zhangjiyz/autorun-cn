@@ -92,7 +92,7 @@ with tempfile.TemporaryDirectory(prefix='autorun-ci-profiles-') as directory:
         index.write_text('\n'.join(lines) + '\n')
 
     def missing_pal3_patch():
-        path = release / 'profile-pal3-v2.zip'
+        path = release / next(entry['filename'] for entry in expected if entry['id'] == 'pal3')
         with ZipFile(path) as archive:
             content = {e.filename: archive.read(e) for e in archive.infolist()}
         del content['pal3/PAL3patch.dll']

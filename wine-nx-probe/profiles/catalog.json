@@ -40,7 +40,7 @@
     {
       "id": "pal3",
       "name": "仙剑奇侠传三",
-      "version": 2,
+      "version": 1,
       "min_api": 10,
       "keywords": "仙剑奇侠传三 仙劍奇俠傳三 仙剑3 PAL3 Chinese Paladin 3",
       "description": "适用于《仙剑奇侠传三》简体中文版，包含 PAL3patch 5.1 补丁文件。",
