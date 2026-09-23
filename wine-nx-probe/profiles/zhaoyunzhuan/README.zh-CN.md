@@ -4,6 +4,8 @@
 
 这份 2002ls 版本的游戏会用 DirectInput 相对位移更新自己的光标。通过主程序应用赵云传适配包时，会直接核对当前选择的 `Game.exe`，匹配后保存为 `Game.exe.autorun-before-profile-patch`，再用主程序内置的原生补丁器启用绝对鼠标模式。包内只有 SHA-256、偏移和替换字节，不执行下载的代码；哈希不匹配时不会修改游戏。主程序中的“恢复上次配置”会同时恢复原始 EXE。安装包不含游戏本体。
 
+部分重新打包的 2002ls 版本在游戏目录中附带 dgVoodoo `DDraw.dll`。它与赵云传2测试目录中的 DLL 完全相同，SHA-256 为 `0279b2a2a8d8f208bb0d40131d6ae42cbee9c271f234cb4a25dac9914d0d27b4`。API 12 起，适配包通过通用清单能力声明这项操作：应用时核对 DLL，将匹配的文件停用并保留为 `DDraw.dll.autorun-disabled`；“恢复上次配置”会还原它。没有这份 DLL 的旧安装目录不受影响，其他版本的同名 DLL 不会被修改。已有版本 1 的适配包可在“选择 / 更换适配包”中手动重装以应用这项规则；真机启动效果仍需验证。
+
 `patch-game.py` 仍保留为电脑端手动工具，和自动适配共用 `binary-patch.json`，不需要在 Switch 上运行。
 
 在 `Game.exe` 旁边的 `Game.wine-nx.txt` 中设置：

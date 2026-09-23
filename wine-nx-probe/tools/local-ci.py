@@ -105,23 +105,30 @@ def verify_profiles(index):
             if archive.testzip():
                 raise ValueError(f'Profile ZIP CRC validation failed: {filename}')
             catalog = archive.read('catalog.tsv').decode('utf-8').splitlines()
-            if len(catalog) != 2 or catalog[0] not in ('autorun-profiles-v1', 'autorun-profiles-v2', 'autorun-profiles-v3'):
+            if len(catalog) != 2 or catalog[0] not in ('autorun-profiles-v1', 'autorun-profiles-v2',
+                                                       'autorun-profiles-v3', 'autorun-profiles-v4'):
                 raise ValueError(f'Profile ZIP must contain exactly one game: {filename}')
             columns = catalog[1].split('\t')
             schema_version = int(catalog[0][-1])
-            if len(columns) != (9 if schema_version == 3 else 8 if schema_version == 2 else 6) or columns[:6] != fields[:6]:
+            if len(columns) != (10 if schema_version == 4 else 9 if schema_version == 3 else
+                                8 if schema_version == 2 else 6) or columns[:6] != fields[:6]:
                 raise ValueError(f'Profile ZIP metadata differs from index: {filename}')
             expected = {'catalog.tsv', f'{ident}/settings.txt', f'{ident}/keys.txt'}
             if schema_version >= 2:
                 if int(api) < 2 or any(flag not in ('0', '1') for flag in columns[6:]):
                     raise ValueError(f'Invalid profile feature flags: {filename}')
-                resources = ('cheats.txt', 'cover.png', 'patch.txt') if schema_version == 3 else ('cheats.txt', 'cover.png')
-                if schema_version == 3 and columns[8] == '1' and int(api) < 3:
+                resources = (('cheats.txt', 'cover.png', 'patch.txt', 'disable.txt') if schema_version == 4 else
+                             ('cheats.txt', 'cover.png', 'patch.txt') if schema_version == 3 else
+                             ('cheats.txt', 'cover.png'))
+                if schema_version >= 3 and columns[8] == '1' and int(api) < 3:
                     raise ValueError(f'Binary patch requires profile API 3: {filename}')
+                if schema_version == 4 and columns[9] == '1' and int(api) < 12 and not (
+                        ident == 'zhaoyunzhuan2' and int(api) >= 11):
+                    raise ValueError(f'File disabling requires profile API 12: {filename}')
                 for flag, resource in zip(columns[6:], resources):
                     if flag == '1':
                         expected.add(f'{ident}/{resource}')
-            if schema_version == 3 and ident == 'pal3' and int(api) >= 7:
+            if schema_version >= 3 and ident == 'pal3' and int(api) >= 7:
                 expected.update(f'pal3/{name}' for name in ('PAL3patch.conf', 'PAL3patch.dll', 'PAL3.dll'))
             if schema_version == 3 and ident == 'zhaoyunzhuan2' and int(api) >= 11:
                 expected.add(f'{ident}/disable.txt')

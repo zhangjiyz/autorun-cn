@@ -4,7 +4,7 @@
 #include "launcher_settings.h"
 #include "game_cheats.h"
 
-#define GAME_PROFILE_API 11
+#define GAME_PROFILE_API 12
 #define GAME_PROFILE_COVER_MAX (2u * 1024u * 1024u)
 #define GAME_PROFILE_MAX 128
 #define GAME_PROFILE_PATCH_MAX 64

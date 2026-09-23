@@ -76,13 +76,14 @@ int game_profile_matches( const struct game_profile *profile, const char *query 
            contains( profile->id, query );
 }
 
-/* Catalog wire format: version header, then six tab-separated UTF-8 columns.
- * The maintainer edits JSON; the packager generates this strict, small format. */
+/* Catalog wire format: version header followed by strict tab-separated columns.
+ * v4 declares file disabling explicitly; v3 keeps Zhao Yun 2's legacy rule. */
 static int parse_catalog( char *text, struct game_profile_catalog *catalog )
 {
-    char *line, *next, *field[9];
-    int v3 = !strncmp( text, "autorun-profiles-v3\n", 20 );
-    int v2 = v3 || !strncmp( text, "autorun-profiles-v2\n", 20 ), fields = v3 ? 9 : v2 ? 8 : 6;
+    char *line, *next, *field[10];
+    int v4 = !strncmp( text, "autorun-profiles-v4\n", 20 );
+    int v3 = v4 || !strncmp( text, "autorun-profiles-v3\n", 20 );
+    int v2 = v3 || !strncmp( text, "autorun-profiles-v2\n", 20 ), fields = v4 ? 10 : v3 ? 9 : v2 ? 8 : 6;
     if (!v2 && strncmp( text, "autorun-profiles-v1\n", 20 )) return 0;
     line = text + 20;
     catalog->count = 0;
@@ -115,12 +116,19 @@ static int parse_catalog( char *text, struct game_profile_catalog *catalog )
                 if (strcmp( field[8], "0" ) && strcmp( field[8], "1" )) return 0;
                 p->has_patch = field[8][0] == '1';
                 if (p->has_patch && p->min_api < 3) return 0;
+                if (v4)
+                {
+                    if (strcmp( field[9], "0" ) && strcmp( field[9], "1" )) return 0;
+                    p->has_disable_file = field[9][0] == '1';
+                    if (p->has_disable_file && p->min_api < 12 &&
+                        (strcmp( field[0], "zhaoyunzhuan2" ) || p->min_api < 11)) return 0;
+                }
             }
         }
         for (int i = 0; i < catalog->count; i++) if (!strcmp( field[0], catalog->entries[i].id )) return 0;
         strcpy( p->id, field[0] ); strcpy( p->name, field[1] );
         p->has_raw_files = v3 && !strcmp( p->id, "pal3" ) && p->min_api >= 7;
-        p->has_disable_file = v3 && !strcmp( p->id, "zhaoyunzhuan2" ) && p->min_api >= 11;
+        if (v3 && !v4) p->has_disable_file = !strcmp( p->id, "zhaoyunzhuan2" ) && p->min_api >= 11;
         strcpy( p->keywords, field[4] ); strcpy( p->description, field[5] );
         catalog->count++;
         line = next;

@@ -45,7 +45,10 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
     assert not any(name.startswith('pal3a/') and name.endswith(('.dll', '.conf')) for name in entries)
     assert b'click:' not in entries['pal3a/keys.txt']
     assert entries['pal3a/cover.png'] == (PROBE / 'profiles/pal3a/cover.png').read_bytes()
-    assert entries['zhaoyunzhuan2/disable.txt'].startswith(b'autorun-file-disable-v1\nfilename=DDraw.dll\nsha256=')
+    expected_disable = (b'autorun-file-disable-v1\nfilename=DDraw.dll\n'
+                        b'sha256=0279b2a2a8d8f208bb0d40131d6ae42cbee9c271f234cb4a25dac9914d0d27b4\n')
+    for ident in ('zhaoyunzhuan', 'zhaoyunzhuan2'):
+        assert entries[f'{ident}/disable.txt'] == expected_disable
     bad = []
 
     def invalid(name, items):
@@ -61,8 +64,10 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
     invalid('oversized', [(name, b'#' * 8192 if name == 'newpal-steam/keys.txt' else data) for name, data in entries.items()])
     invalid('missing-file', [(name, data) for name, data in entries.items() if name != 'newpal-steam/keys.txt'])
     invalid('missing-pal3patch', [(name, data) for name, data in entries.items() if name != 'pal3/PAL3patch.dll'])
-    invalid('missing-zhaoyun2-disable', [(name, data) for name, data in entries.items() if name != 'zhaoyunzhuan2/disable.txt'])
-    invalid('changed-zhaoyun2-disable', [(name, data.replace(b'DDraw.dll', b'Other.dll') if name == 'zhaoyunzhuan2/disable.txt' else data) for name, data in entries.items()])
+    for ident in ('zhaoyunzhuan', 'zhaoyunzhuan2'):
+        disable_name = f'{ident}/disable.txt'
+        invalid(f'missing-{ident}-disable', [(name, data) for name, data in entries.items() if name != disable_name])
+        invalid(f'changed-{ident}-disable', [(name, data.replace(b'DDraw.dll', b'Other.dll') if name == disable_name else data) for name, data in entries.items()])
     invalid('changed-pal3patch', [(name, data + b'x' if name == 'pal3/PAL3patch.dll' else data) for name, data in entries.items()])
     invalid('extra-pal3-config', list(entries.items()) + [('pal3/config.ini', b'motionblur=1\n')])
     invalid('embedded-nul', [(name, data + b'\0' if name == 'catalog.tsv' else data) for name, data in entries.items()])
@@ -79,7 +84,8 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
                     lambda d: d['profiles'][0].update(settings='/tmp/arbitrary-file'),
                     lambda d: next(p for p in d['profiles'] if p['id'] == 'pal3').update(min_api=7),
                     lambda d: next(p for p in d['profiles'] if p['id'] == 'pal3').update(min_api=8),
-                    lambda d: next(p for p in d['profiles'] if p['id'] == 'pal3').update(min_api=9)):
+                    lambda d: next(p for p in d['profiles'] if p['id'] == 'pal3').update(min_api=9),
+                    lambda d: next(p for p in d['profiles'] if p['id'] == 'zhaoyunzhuan').update(min_api=11)):
         broken = json.loads(json.dumps(data)); mutator(broken)
         fixture = maintenance / 'catalog.json'; fixture.write_text(json.dumps(broken))
         try:
@@ -96,9 +102,19 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
     disable = root / 'disable'
     run(*common, PROBE / 'tests/game_profile_disable.c', PROBE / 'source/game_cheats.c',
         *flags('minizip', 'libpng', 'openssl'), '-lz', '-o', disable)
-    selected = root / 'zhaoyun2.zip'
-    pack.build(PROBE / 'profiles/catalog.json', selected, selected='zhaoyunzhuan2')
-    run(disable, selected)
+    for ident, api, schema in (('zhaoyunzhuan', 12, b'autorun-profiles-v4\n'),
+                               ('zhaoyunzhuan2', 11, b'autorun-profiles-v3\n')):
+        selected = root / f'{ident}.zip'
+        pack.build(PROBE / 'profiles/catalog.json', selected, selected=ident)
+        with ZipFile(selected) as archive:
+            assert archive.read('catalog.tsv').startswith(schema)
+        run(disable, selected, ident, api)
+    generic = json.loads(json.dumps(data))
+    next(p for p in generic['profiles'] if p['id'] == 'zhaoyunzhuan')['id'] = 'generic-ddraw'
+    (maintenance / 'catalog.json').write_text(json.dumps(generic))
+    selected = root / 'generic-ddraw.zip'
+    pack.build(maintenance / 'catalog.json', selected, selected='generic-ddraw')
+    run(disable, selected, 'generic-ddraw', 12)
     core = root / 'core'
     run(*common, PROBE / 'tests/game_profiles.c', PROBE / 'source/game_cheats.c',
         *flags('minizip', 'libpng', 'openssl'), '-lz', '-o', core)

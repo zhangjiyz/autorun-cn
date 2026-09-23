@@ -54,6 +54,7 @@ enum ui_action ui_list_run( struct ui *ui, struct ui_list *list, const char *tit
         case 1: assert( count == 2 && rows[1].disabled && rows[0].adjustable ); list->selection = 0; return UI_ACTION_RESET;
         case 2: assert( count >= 3 ); list->selection = 0; return UI_ACTION_CHOOSE;
         case 3: assert( count == 3 && strstr( rows[1].label, "新仙剑" ) && !rows[1].disabled ); list->selection = 1; return UI_ACTION_CHOOSE;
+        case 4: assert( count >= 3 && strstr( rows[1].label, "新仙剑" ) && !rows[1].disabled ); list->selection = 1; return UI_ACTION_CHOOSE;
         default: assert( 0 );
         }
     }
@@ -64,8 +65,9 @@ enum ui_action ui_list_run( struct ui *ui, struct ui_list *list, const char *tit
     {
     case 0: assert( rows[1].disabled && !binding.id[0] ); list->selection = 0; return UI_ACTION_CHOOSE;
     case 1: assert( !rows[1].disabled && !strcmp( binding.id, "newpal-steam" ) ); list->selection = 1; return UI_ACTION_CHOOSE;
-    case 2: assert( !rows[2].disabled ); list->selection = 2; return UI_ACTION_CHOOSE;
-    case 3: assert( !rows[1].disabled && !strcmp( binding.id, "newpal-steam" ) ); return UI_ACTION_BACK;
+    case 2: assert( !rows[1].disabled && !strcmp( binding.id, "newpal-steam" ) ); list->selection = 0; return UI_ACTION_CHOOSE;
+    case 3: assert( !rows[2].disabled ); list->selection = 2; return UI_ACTION_CHOOSE;
+    case 4: assert( !rows[1].disabled && !strcmp( binding.id, "newpal-steam" ) ); return UI_ACTION_BACK;
     default: assert( 0 );
     }
     return UI_ACTION_BACK;
@@ -123,7 +125,7 @@ int main( int argc, char **argv )
     file = fopen( config_path, "w" ); assert( file );
     assert( fputs( "index-url=\nauto-update=1\n", file ) >= 0 ); assert( !fclose( file ) );
     launcher_profiles_open( &ui, argv[1], exe, "Test game" );
-    assert( menu_step == 4 && filter_step == 4 && applied == 2 && latest == 0 && restored == 1 );
+    assert( menu_step == 5 && filter_step == 5 && applied == 2 && latest == 1 && restored == 1 );
     assert( access( settings_path, F_OK ) == 0 );
     /* Rebind offline, then provide a newer table + only this game's ZIP.
      * Automatic checks must preserve edits and never fetch another game. */

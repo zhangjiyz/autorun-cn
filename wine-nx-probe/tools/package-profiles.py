@@ -197,7 +197,12 @@ def build(catalog_path, output, selected=None):
             raise ValueError('profile selection must identify one entry')
     v2 = catalog['schema'] >= 2
     v3 = catalog['schema'] >= 3
-    lines = [f'autorun-profiles-v{catalog["schema"]}\n']
+    # Keep existing independent packages on v3. A package declaring the new
+    # generic file-disable capability gets an explicit v4 feature column.
+    wire_schema = 4 if v3 and any('disable_file' in entry and type(entry.get('min_api')) is int and
+                                  entry['min_api'] >= 12
+                                  for entry in entries) else catalog['schema']
+    lines = [f'autorun-profiles-v{wire_schema}\n']
     files, ids = {}, set()
     for entry in entries:
         required = {'id', 'name', 'version', 'min_api', 'keywords', 'description', 'settings', 'keys'}
@@ -216,8 +221,13 @@ def build(catalog_path, output, selected=None):
                 raise ValueError(f'{key} must be a positive integer')
         if ('raw_files' in entry) != (v3 and ident == 'pal3' and entry['min_api'] >= 7):
             raise ValueError('PAL3 API 7 requires the three patch files')
-        if ('disable_file' in entry) != (v3 and ident == 'zhaoyunzhuan2' and entry['min_api'] >= 11):
-            raise ValueError('Zhao Yun 2 API 11 requires the verified DDraw.dll disable rule')
+        if wire_schema == 3 and ('disable_file' in entry) != (ident == 'zhaoyunzhuan2' and entry['min_api'] >= 11):
+            raise ValueError('v3 only supports Zhao Yun 2 file disabling')
+        if wire_schema == 4 and 'disable_file' in entry and entry['min_api'] < 12 and not (
+                ident == 'zhaoyunzhuan2' and entry['min_api'] >= 11):
+            raise ValueError('generic file disabling requires profile API 12')
+        if v3 and ident == 'zhaoyunzhuan2' and entry['min_api'] >= 11 and 'disable_file' not in entry:
+            raise ValueError('Zhao Yun 2 requires its legacy file disable rule')
         keywords = field(entry['keywords'], 192, 'keywords')
         description = field(entry['description'], 512, 'description')
         if v2 and entry['min_api'] < 2:
@@ -229,6 +239,8 @@ def build(catalog_path, output, selected=None):
             columns += [str(int('binary_patch' in entry))]
             if 'binary_patch' in entry and entry['min_api'] < 3:
                 raise ValueError('binary patches require min_api >= 3')
+        if wire_schema == 4:
+            columns.append(str(int('disable_file' in entry)))
         lines.append('\t'.join(columns) + '\n')
         if 'cheats' in entry:
             files[f'{ident}/cheats.txt'] = cheats(catalog_path.parent, entry['cheats'])

@@ -430,8 +430,13 @@ void launcher_profiles_open( struct ui *ui, const char *root, const char *exe, c
             else for (int i = 0; i < catalog->count; i++) if (!strcmp( catalog->entries[i].id, binding.id )) { selected = i; break; }
             if (selected >= 0)
             {
-                enum game_profile_result result = install_selected( ui, root, config.url, exe, settings, keys, &catalog->entries[selected], &binding, 0, 0 );
-                if (result == GAME_PROFILE_OLD || result == GAME_PROFILE_INCOMPATIBLE) ui_message( ui, "适配包更新", game_profile_error( result ) );
+                if (list.selection == 1 && catalog->entries[selected].version <= binding.version)
+                    ui_message( ui, "适配包更新", "此游戏适配包已是最新版本。" );
+                else
+                {
+                    enum game_profile_result result = install_selected( ui, root, config.url, exe, settings, keys, &catalog->entries[selected], &binding, 0, 0 );
+                    if (result == GAME_PROFILE_OLD || result == GAME_PROFILE_INCOMPATIBLE) ui_message( ui, "适配包更新", game_profile_error( result ) );
+                }
             }
             else if (list.selection) ui_message( ui, "未找到适配包", "当前管理表没有此游戏，原配置保持不变。" );
         }
