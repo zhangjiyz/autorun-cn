@@ -120,6 +120,7 @@ static int parse_catalog( char *text, struct game_profile_catalog *catalog )
         for (int i = 0; i < catalog->count; i++) if (!strcmp( field[0], catalog->entries[i].id )) return 0;
         strcpy( p->id, field[0] ); strcpy( p->name, field[1] );
         p->has_raw_files = v3 && !strcmp( p->id, "pal3" ) && p->min_api >= 7;
+        p->has_disable_file = v3 && !strcmp( p->id, "zhaoyunzhuan2" ) && p->min_api >= 11;
         strcpy( p->keywords, field[4] ); strcpy( p->description, field[5] );
         catalog->count++;
         line = next;
@@ -266,6 +267,17 @@ static int parse_binary_patch( const char *text, struct game_profile_patch *patc
     patch->offset = offset; patch->size = old_size; return 1;
 }
 
+/* This API revision only permits disabling the verified local DirectDraw shim. */
+static int parse_disable_file( const char *text, char digest[65] )
+{
+    static const char prefix[] = "autorun-file-disable-v1\nfilename=DDraw.dll\nsha256=";
+    if (strncmp( text, prefix, sizeof(prefix) - 1 )) return 0;
+    text += sizeof(prefix) - 1;
+    if (strlen( text ) != 65 || text[64] != '\n' || strspn( text, "0123456789abcdef" ) != 64) return 0;
+    memcpy( digest, text, 64 ); digest[64] = 0;
+    return 1;
+}
+
 static int allowed_key( const char *key, int controls )
 {
     static const char settings[] =
@@ -391,7 +403,7 @@ enum game_profile_result game_profiles_load( const char *archive, struct game_pr
 {
     unzFile zip = unzOpen64( archive );
     unz_global_info64 global;
-    unsigned char seen[GAME_PROFILE_MAX][5 + PAL3_RAW_COUNT] = {{0}};
+    unsigned char seen[GAME_PROFILE_MAX][6 + PAL3_RAW_COUNT] = {{0}};
     char *text = malloc( CATALOG_LIMIT );
     struct launcher_kv *raw = malloc( sizeof(*raw) );
     struct game_cheats *cheats = malloc( sizeof(*cheats) );
@@ -401,10 +413,10 @@ enum game_profile_result game_profiles_load( const char *archive, struct game_pr
     game_profiles_clear( catalog );
     if (!zip || !text || !raw || !cheats) { result = GAME_PROFILE_IO; goto done; }
     if (unzGetGlobalInfo64( zip, &global ) != UNZ_OK || !global.number_entry ||
-        global.number_entry > 1 + GAME_PROFILE_MAX * (5 + PAL3_RAW_COUNT) || unzLocateFile( zip, "catalog.tsv", 1 ) != UNZ_OK ||
+        global.number_entry > 1 + GAME_PROFILE_MAX * (6 + PAL3_RAW_COUNT) || unzLocateFile( zip, "catalog.tsv", 1 ) != UNZ_OK ||
         !read_zip_text( zip, text, CATALOG_LIMIT ) || !parse_catalog( text, catalog )) goto done;
     for (int i = 0; i < catalog->count; i++) expected_count += 2 + catalog->entries[i].has_cheats +
-        catalog->entries[i].has_cover + catalog->entries[i].has_patch +
+        catalog->entries[i].has_cover + catalog->entries[i].has_patch + catalog->entries[i].has_disable_file +
         PAL3_RAW_COUNT * catalog->entries[i].has_raw_files;
     if (global.number_entry != (unsigned)expected_count || unzGoToFirstFile( zip ) != UNZ_OK) goto done;
     do
@@ -415,13 +427,14 @@ enum game_profile_result game_profiles_load( const char *archive, struct game_pr
         if (unzGetCurrentFileInfo64( zip, &info, name, sizeof(name), NULL, 0, NULL, 0 ) != UNZ_OK ||
             info.size_filename >= sizeof(name) || strlen( name ) != info.size_filename) goto done;
         if (!strcmp( name, "catalog.tsv" )) { if (++index_count != 1) goto done; continue; }
-        for (int i = 0; i < catalog->count && !found; i++) for (int k = 0; k < 5 + PAL3_RAW_COUNT; k++)
+        for (int i = 0; i < catalog->count && !found; i++) for (int k = 0; k < 6 + PAL3_RAW_COUNT; k++)
         {
             struct game_profile *p = &catalog->entries[i];
-            static const char *files[] = {"settings.txt", "keys.txt", "cheats.txt", "cover.png", "patch.txt"};
+            static const char *files[] = {"settings.txt", "keys.txt", "cheats.txt", "cover.png", "patch.txt", "disable.txt"};
             if ((k == 2 && !p->has_cheats) || (k == 3 && !p->has_cover) ||
-                (k == 4 && !p->has_patch) || (k >= 5 && !p->has_raw_files)) continue;
-            snprintf( expected, sizeof(expected), "%s/%s", p->id, k < 5 ? files[k] : pal3_raw_names[k - 5] );
+                (k == 4 && !p->has_patch) || (k == 5 && !p->has_disable_file) ||
+                (k >= 6 && !p->has_raw_files)) continue;
+            snprintf( expected, sizeof(expected), "%s/%s", p->id, k < 6 ? files[k] : pal3_raw_names[k - 6] );
             if (strcmp( name, expected )) continue;
             if (seen[i][k]++) goto done;
             if (k == 3)
@@ -429,9 +442,9 @@ enum game_profile_result game_profiles_load( const char *archive, struct game_pr
                 cover_total += info.uncompressed_size;
                 if (cover_total > 16 * 1024 * 1024 || !read_zip_cover( zip, p )) goto done;
             }
-            else if (k >= 5)
+            else if (k >= 6)
             {
-                if (!read_zip_pal3_raw( zip, p, k - 5 )) goto done;
+                if (!read_zip_pal3_raw( zip, p, k - 6 )) goto done;
             }
             else
             {
@@ -446,6 +459,10 @@ enum game_profile_result game_profiles_load( const char *archive, struct game_pr
                 {
                     if (!parse_binary_patch( raw->text, &p->patch )) goto done;
                 }
+                else if (k == 5)
+                {
+                    if (!parse_disable_file( raw->text, p->disable_digest )) goto done;
+                }
                 else if (!canonical_kv( raw, k ? &p->keys : &p->settings, k )) goto done;
             }
             found = 1; break;
@@ -455,9 +472,10 @@ enum game_profile_result game_profiles_load( const char *archive, struct game_pr
     if (next != UNZ_END_OF_LIST_OF_FILE || index_count != 1) goto done;
     for (int i = 0; i < catalog->count; i++)
         if (!seen[i][0] || !seen[i][1] || seen[i][2] != catalog->entries[i].has_cheats ||
-            seen[i][3] != catalog->entries[i].has_cover || seen[i][4] != catalog->entries[i].has_patch) goto done;
+            seen[i][3] != catalog->entries[i].has_cover || seen[i][4] != catalog->entries[i].has_patch ||
+            seen[i][5] != catalog->entries[i].has_disable_file) goto done;
     for (int i = 0; i < catalog->count; i++) for (unsigned int k = 0; k < PAL3_RAW_COUNT; k++)
-        if (seen[i][5 + k] != catalog->entries[i].has_raw_files) goto done;
+        if (seen[i][6 + k] != catalog->entries[i].has_raw_files) goto done;
     result = GAME_PROFILE_OK;
  done:
     if (zip) unzClose( zip );
@@ -755,6 +773,100 @@ enum game_profile_result game_profile_patch_restore( const char *exe )
         !file_digest( exe, digest ) || strcmp( digest, patch.original_digest ) || !erase_durable( state ))
         return GAME_PROFILE_RECOVERY;
     return GAME_PROFILE_OK;
+}
+
+static int disable_paths( const char *exe, char target[768], char backup[800], char state[800] )
+{
+    const char *slash = strrchr( exe, '/' );
+    size_t parent = slash ? (size_t)(slash - exe + 1) : 0;
+    if (parent + sizeof("DDraw.dll") > 768) return 0;
+    if (parent) memcpy( target, exe, parent );
+    strcpy( target + parent, "DDraw.dll" );
+    return snprintf( backup, 800, "%s.autorun-disabled", target ) < 800 &&
+           snprintf( state, 800, "%s.autorun-file-disable", exe ) < 800 &&
+           safe_path( target ) && safe_path( backup ) && safe_path( state );
+}
+
+static int disable_state_read( const char *state, char digest[65], int *exists )
+{
+    char text[160];
+    FILE *file;
+    size_t size;
+    *exists = 0;
+    if (!safe_path( state )) return 0;
+    if (!(file = fopen( state, "rb" ))) return errno == ENOENT;
+    size = fread( text, 1, sizeof(text) - 1, file );
+    int ok = size < sizeof(text) - 1 && fgetc( file ) == EOF && !ferror( file );
+    if (fclose( file )) ok = 0;
+    if (!ok || memchr( text, 0, size )) return 0;
+    text[size] = 0;
+    *exists = 1;
+    return parse_disable_file( text, digest );
+}
+
+static int verified_file( const char *path, const char *expected, int *exists )
+{
+    struct stat st;
+    char actual[65];
+    *exists = 0;
+    if (!safe_path( path )) return 0;
+    if (lstat( path, &st )) return errno == ENOENT;
+    *exists = 1;
+    return S_ISREG( st.st_mode ) && file_digest( path, actual ) && !strcmp( actual, expected );
+}
+
+enum game_profile_result game_profile_disable_recover( const char *exe )
+{
+    char target[768], backup[800], state[800], digest[65];
+    int active, source_exists, backup_exists;
+    if (!disable_paths( exe, target, backup, state ) ||
+        !disable_state_read( state, digest, &active )) return GAME_PROFILE_RECOVERY;
+    if (!active) return GAME_PROFILE_OK;
+    if (!verified_file( target, digest, &source_exists ) ||
+        !verified_file( backup, digest, &backup_exists ) || (!source_exists && !backup_exists))
+        return GAME_PROFILE_RECOVERY;
+    if (source_exists)
+    {
+        if (backup_exists ? !erase_durable( target ) : rename( target, backup ) || !sync_parent( target ))
+            return GAME_PROFILE_RECOVERY;
+    }
+    return GAME_PROFILE_OK;
+}
+
+enum game_profile_result game_profile_disable_apply( const char *exe, const char *digest, int *changed )
+{
+    char target[768], backup[800], state[800], active_digest[65], text[160];
+    int active, source_exists, backup_exists;
+    *changed = 0;
+    if (!digest || strlen( digest ) != 64 || strspn( digest, "0123456789abcdef" ) != 64 ||
+        !disable_paths( exe, target, backup, state ) ||
+        !disable_state_read( state, active_digest, &active )) return GAME_PROFILE_INVALID;
+    if (active)
+    {
+        if (strcmp( active_digest, digest )) return GAME_PROFILE_RECOVERY;
+        return game_profile_disable_recover( exe );
+    }
+    if (!verified_file( target, digest, &source_exists ) ||
+        !verified_file( backup, digest, &backup_exists )) return GAME_PROFILE_UNSUPPORTED;
+    if (!source_exists && !backup_exists) return GAME_PROFILE_OK;
+    int size = snprintf( text, sizeof(text), "autorun-file-disable-v1\nfilename=DDraw.dll\nsha256=%s\n", digest );
+    if (size <= 0 || (size_t)size >= sizeof(text) || !durable_write( state, text, size )) return GAME_PROFILE_IO;
+    *changed = 1;
+    return game_profile_disable_recover( exe );
+}
+
+enum game_profile_result game_profile_disable_restore( const char *exe )
+{
+    char target[768], backup[800], state[800], digest[65];
+    int active, source_exists, backup_exists;
+    if (!disable_paths( exe, target, backup, state ) ||
+        !disable_state_read( state, digest, &active )) return GAME_PROFILE_RECOVERY;
+    if (!active) return GAME_PROFILE_OK;
+    if (!verified_file( target, digest, &source_exists ) ||
+        !verified_file( backup, digest, &backup_exists ) || (!source_exists && !backup_exists))
+        return GAME_PROFILE_RECOVERY;
+    if (!source_exists && (rename( backup, target ) || !sync_parent( target ))) return GAME_PROFILE_RECOVERY;
+    return erase_durable( state ) ? GAME_PROFILE_OK : GAME_PROFILE_RECOVERY;
 }
 
 static uint32_t snapshot_crc( const struct snapshot *s )

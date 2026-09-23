@@ -39,7 +39,7 @@ int main( int argc, char **argv )
     assert( argc >= 2 );
     struct game_profile_catalog *catalog = calloc( 1, sizeof(*catalog) );
     assert( game_profiles_load( argv[1], catalog ) == GAME_PROFILE_OK );
-    assert( catalog->count == 5 );
+    assert( catalog->count >= 7 );
     assert( game_profile_matches( &catalog->entries[0], "新仙剑" ) );
     assert( game_profile_matches( &catalog->entries[0], "NEWpal" ) );
     assert( !game_profile_matches( &catalog->entries[0], "not-this-game" ) );

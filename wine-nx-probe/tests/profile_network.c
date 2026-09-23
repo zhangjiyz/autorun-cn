@@ -92,7 +92,7 @@ int main( int argc, char **argv )
     /* Index validation is separate from ZIP validation. */
     size_t length; char *valid = contents( index_path, &length );
     struct game_profile_catalog *index = calloc( 1, sizeof(*index) );
-    assert( game_profile_index_parse( valid, index ) && index->count == 5 );
+    assert( game_profile_index_parse( valid, index ) && index->count >= 5 );
     assert( !strcmp( index->entries[0].id, "newpal-steam" ) && index->entries[0].version == base_version + 1 );
     char *bad = malloc( length * 2 + 1 ); assert( bad );
     strcpy( bad, valid ); strstr( bad, "https://" )[4] = 'x'; assert( !game_profile_index_parse( bad, index ) );

@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "original_sha256": "9fc36a955a6addaa8727bd9fd972dbe226c4094b19455b469094b3063c8214ce",
+  "patched_sha256": "62aac3deab7dd875d2998e1f7e2705d93fd9bb24f25d9888a417fd37243d00f1",
+  "offset": 316192,
+  "old": "a128fe6600",
+  "new": "b800000000"
+}

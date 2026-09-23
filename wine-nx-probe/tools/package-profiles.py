@@ -175,6 +175,15 @@ def binary_patch(root, relative):
             f'new={patch["new"]}\n').encode('ascii')
 
 
+def disable_file(root, relative):
+    rule = json.loads(resource(root, relative).decode('utf-8'), object_pairs_hook=unique_object)
+    if (set(rule) != {'schema', 'filename', 'sha256'} or type(rule['schema']) is not int or
+            rule['schema'] != 1 or rule['filename'] != 'DDraw.dll' or
+            not isinstance(rule['sha256'], str) or not re.fullmatch('[0-9a-f]{64}', rule['sha256'])):
+        raise ValueError('file disable rule must name DDraw.dll and its exact SHA-256')
+    return (f'autorun-file-disable-v1\nfilename=DDraw.dll\nsha256={rule["sha256"]}\n').encode('ascii')
+
+
 def build(catalog_path, output, selected=None):
     catalog = json.loads(catalog_path.read_text(encoding='utf-8'), object_pairs_hook=unique_object)
     if set(catalog) != {'schema', 'profiles'} or type(catalog['schema']) is not int or catalog['schema'] not in (1, 2, 3):
@@ -192,7 +201,7 @@ def build(catalog_path, output, selected=None):
     files, ids = {}, set()
     for entry in entries:
         required = {'id', 'name', 'version', 'min_api', 'keywords', 'description', 'settings', 'keys'}
-        optional = ({'cheats', 'cover', 'url'} if v2 else set()) | ({'binary_patch', 'raw_files'} if v3 else set())
+        optional = ({'cheats', 'cover', 'url'} if v2 else set()) | ({'binary_patch', 'raw_files', 'disable_file'} if v3 else set())
         if not required <= set(entry) or set(entry) - required - optional:
             raise ValueError('unexpected or missing profile fields')
         ident = field(entry['id'], 64, 'id')
@@ -207,6 +216,8 @@ def build(catalog_path, output, selected=None):
                 raise ValueError(f'{key} must be a positive integer')
         if ('raw_files' in entry) != (v3 and ident == 'pal3' and entry['min_api'] >= 7):
             raise ValueError('PAL3 API 7 requires the three patch files')
+        if ('disable_file' in entry) != (v3 and ident == 'zhaoyunzhuan2' and entry['min_api'] >= 11):
+            raise ValueError('Zhao Yun 2 API 11 requires the verified DDraw.dll disable rule')
         keywords = field(entry['keywords'], 192, 'keywords')
         description = field(entry['description'], 512, 'description')
         if v2 and entry['min_api'] < 2:
@@ -225,6 +236,8 @@ def build(catalog_path, output, selected=None):
             files[f'{ident}/cover.png'] = cover(catalog_path.parent, entry['cover'])
         if 'binary_patch' in entry:
             files[f'{ident}/patch.txt'] = binary_patch(catalog_path.parent, entry['binary_patch'])
+        if 'disable_file' in entry:
+            files[f'{ident}/disable.txt'] = disable_file(catalog_path.parent, entry['disable_file'])
         if 'raw_files' in entry:
             if not isinstance(entry['raw_files'], dict) or set(entry['raw_files']) != set(PAL3_RAW_FILES):
                 raise ValueError('PAL3 raw files must be the exact supported three files')

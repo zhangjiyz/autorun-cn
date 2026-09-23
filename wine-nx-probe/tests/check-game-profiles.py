@@ -45,6 +45,7 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
     assert not any(name.startswith('pal3a/') and name.endswith(('.dll', '.conf')) for name in entries)
     assert b'click:' not in entries['pal3a/keys.txt']
     assert entries['pal3a/cover.png'] == (PROBE / 'profiles/pal3a/cover.png').read_bytes()
+    assert entries['zhaoyunzhuan2/disable.txt'].startswith(b'autorun-file-disable-v1\nfilename=DDraw.dll\nsha256=')
     bad = []
 
     def invalid(name, items):
@@ -60,6 +61,8 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
     invalid('oversized', [(name, b'#' * 8192 if name == 'newpal-steam/keys.txt' else data) for name, data in entries.items()])
     invalid('missing-file', [(name, data) for name, data in entries.items() if name != 'newpal-steam/keys.txt'])
     invalid('missing-pal3patch', [(name, data) for name, data in entries.items() if name != 'pal3/PAL3patch.dll'])
+    invalid('missing-zhaoyun2-disable', [(name, data) for name, data in entries.items() if name != 'zhaoyunzhuan2/disable.txt'])
+    invalid('changed-zhaoyun2-disable', [(name, data.replace(b'DDraw.dll', b'Other.dll') if name == 'zhaoyunzhuan2/disable.txt' else data) for name, data in entries.items()])
     invalid('changed-pal3patch', [(name, data + b'x' if name == 'pal3/PAL3patch.dll' else data) for name, data in entries.items()])
     invalid('extra-pal3-config', list(entries.items()) + [('pal3/config.ini', b'motionblur=1\n')])
     invalid('embedded-nul', [(name, data + b'\0' if name == 'catalog.tsv' else data) for name, data in entries.items()])
@@ -90,6 +93,12 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
               '-O1', '-g', '-fsanitize=undefined', '-fno-omit-frame-pointer', '-I' + str(PROBE / 'source')]
     if 'clang' not in subprocess.check_output([common[0], '--version'], text=True).lower():
         common.append('-Wno-format-truncation')
+    disable = root / 'disable'
+    run(*common, PROBE / 'tests/game_profile_disable.c', PROBE / 'source/game_cheats.c',
+        *flags('minizip', 'libpng', 'openssl'), '-lz', '-o', disable)
+    selected = root / 'zhaoyun2.zip'
+    pack.build(PROBE / 'profiles/catalog.json', selected, selected='zhaoyunzhuan2')
+    run(disable, selected)
     core = root / 'core'
     run(*common, PROBE / 'tests/game_profiles.c', PROBE / 'source/game_cheats.c',
         *flags('minizip', 'libpng', 'openssl'), '-lz', '-o', core)
@@ -98,7 +107,7 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
     legacy = json.loads(json.dumps(data)); legacy['schema'] = 1
     for entry in legacy['profiles']:
         entry.pop('cheats', None); entry.pop('cover', None); entry.pop('binary_patch', None)
-        entry.pop('raw_files', None); entry['min_api'] = 1
+        entry.pop('raw_files', None); entry.pop('disable_file', None); entry['min_api'] = 1
     legacy_keys = maintenance / 'pal3/PAL3.keys.txt'
     current_keys = legacy_keys.read_text()
     legacy_keys.write_text(re.sub(r'^X=click:\d+,\d+(?:,[12])?$', 'X=0x0d', current_keys,

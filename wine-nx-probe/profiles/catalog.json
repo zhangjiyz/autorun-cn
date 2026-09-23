@@ -78,6 +78,20 @@
       "cheats": "zhaoyunzhuan/cheats.json",
       "cover": "zhaoyunzhuan/cover.png",
       "binary_patch": "zhaoyunzhuan/binary-patch.json"
+    },
+    {
+      "id": "zhaoyunzhuan2",
+      "name": "三国赵云传2·纵横天下",
+      "version": 1,
+      "min_api": 11,
+      "keywords": "三国赵云传2 三国赵云传之纵横天下 三國趙雲傳二 縱橫天下 ZhaoYun2 zhaoyun2",
+      "description": "适用于指定 SHA-256 的 Game.exe 与 DDraw.dll；沿用一代按键与鼠标方案，停用冲突的本地 DirectDraw 封装。",
+      "settings": "zhaoyunzhuan2/Game.wine-nx.txt",
+      "keys": "zhaoyunzhuan2/Game.keys.txt",
+      "cheats": "zhaoyunzhuan2/cheats.json",
+      "cover": "zhaoyunzhuan2/cover.png",
+      "binary_patch": "zhaoyunzhuan2/binary-patch.json",
+      "disable_file": "zhaoyunzhuan2/disable-file.json"
     }
   ]
 }

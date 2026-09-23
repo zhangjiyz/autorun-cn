@@ -33,6 +33,7 @@ enum game_profile_result launcher_profiles_recover( const char *root, const char
     char settings[768], keys[768];
     if (!profile_paths( root, exe, settings, keys )) return GAME_PROFILE_OK;
     enum game_profile_result result = game_profile_patch_recover( exe );
+    if (result == GAME_PROFILE_OK) result = game_profile_disable_recover( exe );
     return result == GAME_PROFILE_OK ? game_profile_recover( settings, keys ) : result;
 }
 
@@ -285,6 +286,8 @@ static enum game_profile_result install_selected( struct ui *ui, const char *roo
         snprintf( message, sizeof(message), "%s · 版本 %u\n%s\n\n%s%s", selected->name, selected->version, selected->description,
             same ? "只下载此游戏适配包；保留本地修改，并备份当前配置。" : "请确认游戏版本相符。首次应用或更换来源会应用包内默认配置、按键和封面，金手指默认关闭。原配置会先备份。",
             selected->has_patch ? "\n此适配会核对、备份并修改所选游戏 EXE。" : "" );
+        if (selected->has_disable_file)
+            strncat( message, "\n此适配会校验并停用游戏目录中的 DDraw.dll，可恢复。", sizeof(message) - strlen(message) - 1 );
         if (!ui_confirm( ui, "应用此游戏适配包？", message, "应用" )) return GAME_PROFILE_IO;
     }
     struct game_profile_catalog *package = calloc( 1, sizeof(*package) );
@@ -292,7 +295,7 @@ static enum game_profile_result install_selected( struct ui *ui, const char *roo
     struct profile_fetch task = {.root = root, .url = url, .selected = selected, .catalog = package,
         .package = 1, .automatic = automatic, .started = started};
     enum game_profile_result result = GAME_PROFILE_IO;
-    int preserved, patched = 0;
+    int preserved, patched = 0, disabled = 0;
     if (fetch( ui, &task ))
     {
         struct game_profile *profile = &package->entries[0];
@@ -306,11 +309,21 @@ static enum game_profile_result install_selected( struct ui *ui, const char *roo
                 if (restored != GAME_PROFILE_OK) result = restored;
             }
         }
+        if (result == GAME_PROFILE_OK && profile->has_disable_file)
+        {
+            result = game_profile_disable_apply( exe, profile->disable_digest, &disabled );
+            if (result != GAME_PROFILE_OK)
+            {
+                if (disabled && game_profile_disable_restore( exe ) != GAME_PROFILE_OK) result = GAME_PROFILE_RECOVERY;
+                if (game_profile_restore( settings, keys ) != GAME_PROFILE_OK) result = GAME_PROFILE_RECOVERY;
+                if (patched && game_profile_patch_restore( exe ) != GAME_PROFILE_OK) result = GAME_PROFILE_RECOVERY;
+            }
+        }
         if (ui && !automatic && result != GAME_PROFILE_OK) ui_message( ui, "适配包未应用", game_profile_error( result ) );
     }
     game_profiles_clear( package ); free( package );
     if (ui && !automatic && result == GAME_PROFILE_OK)
-        ui_message( ui, "适配包已应用", "已应用此游戏的适配包。配置、按键、金手指、封面和声明的游戏补丁已保存，可恢复上次配置。" );
+        ui_message( ui, "适配包已应用", "已应用此游戏的适配包。配置、按键、金手指、封面和声明的游戏文件操作已保存，可恢复上次配置。" );
     return result;
 }
 
@@ -388,7 +401,7 @@ void launcher_profiles_open( struct ui *ui, const char *root, const char *exe, c
         snprintf( rows[2].label, sizeof(rows[2].label), "恢复上次配置" );
         char backup[800]; struct stat st; snprintf( backup, sizeof(backup), "%s.profile-backup", settings );
         rows[2].disabled = stat( backup, &st ) != 0;
-        rows[2].help = "恢复上一次安装前的配置、按键、金手指、封面、绑定和由适配包修改的游戏 EXE。";
+        rows[2].help = "恢复上一次安装前的配置、按键、金手指、封面、绑定及适配包修改的游戏文件。";
         snprintf( rows[3].label, sizeof(rows[3].label), "管理表与自动更新设置" );
         rows[3].help = "全局只维护一个管理表地址，也可在主程序设置 → 系统中修改。";
         enum ui_action action = ui_list_run( ui, &list, "适配包更新", title, rows, 4, 0 );
@@ -401,6 +414,7 @@ void launcher_profiles_open( struct ui *ui, const char *root, const char *exe, c
             {
                 enum game_profile_result result = game_profile_restore( settings, keys );
                 if (result == GAME_PROFILE_OK) result = game_profile_patch_restore( exe );
+                if (result == GAME_PROFILE_OK) result = game_profile_disable_restore( exe );
                 ui_message( ui, "恢复上次配置", result == GAME_PROFILE_OK ? "已恢复上一次应用前的配置和游戏程序。" : game_profile_error( result ) );
             }
             continue;

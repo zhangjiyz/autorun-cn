@@ -4,7 +4,7 @@
 #include "launcher_settings.h"
 #include "game_cheats.h"
 
-#define GAME_PROFILE_API 10
+#define GAME_PROFILE_API 11
 #define GAME_PROFILE_COVER_MAX (2u * 1024u * 1024u)
 #define GAME_PROFILE_MAX 128
 #define GAME_PROFILE_PATCH_MAX 64
@@ -29,7 +29,8 @@ struct game_profile
     unsigned char *cover;
     unsigned int cover_size;
     struct game_profile_patch patch;
-    int has_cheats, has_cover, has_patch, has_raw_files;
+    char disable_digest[65];
+    int has_cheats, has_cover, has_patch, has_raw_files, has_disable_file;
 };
 
 struct game_profile_catalog
@@ -61,6 +62,9 @@ enum game_profile_result game_profile_recover( const char *settings, const char 
 enum game_profile_result game_profile_patch_recover( const char *exe );
 enum game_profile_result game_profile_patch_apply( const char *exe, const struct game_profile_patch *patch, int *changed );
 enum game_profile_result game_profile_patch_restore( const char *exe );
+enum game_profile_result game_profile_disable_recover( const char *exe );
+enum game_profile_result game_profile_disable_apply( const char *exe, const char *digest, int *changed );
+enum game_profile_result game_profile_disable_restore( const char *exe );
 enum game_profile_result game_profile_binding_read( const char *settings, struct game_profile_binding *binding );
 enum game_profile_result game_profile_apply( const char *settings, const char *keys,
         const struct game_profile *profile, const char *repository, const char *tag, int *preserved );

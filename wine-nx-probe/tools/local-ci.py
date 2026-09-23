@@ -123,6 +123,8 @@ def verify_profiles(index):
                         expected.add(f'{ident}/{resource}')
             if schema_version == 3 and ident == 'pal3' and int(api) >= 7:
                 expected.update(f'pal3/{name}' for name in ('PAL3patch.conf', 'PAL3patch.dll', 'PAL3.dll'))
+            if schema_version == 3 and ident == 'zhaoyunzhuan2' and int(api) >= 11:
+                expected.add(f'{ident}/disable.txt')
             if len(entries) != len(expected) or {e.filename for e in entries} != expected:
                 raise ValueError(f'Unexpected/missing/duplicate profile files: {filename}')
         profiles.append({'id': ident, 'name': name, 'version': int(version), 'min_api': int(api),
