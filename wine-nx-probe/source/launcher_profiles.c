@@ -215,8 +215,16 @@ static int fetch( struct ui *ui, struct profile_fetch *f )
     SDL_DestroyMutex( f->mutex ); f->mutex = NULL;
     if (SDL_AtomicGet( &f->cancel ) || (ui && !ui->running)) return 0;
     if (f->result == GAME_PROFILE_OK) return 1;
-    if (ui && !f->automatic) ui_message( ui, f->package ? "适配包未下载" : "管理表未更新",
-        f->network != AUTORUN_UPDATE_OK ? "下载失败或校验不符，请检查管理表地址、附件与网络。原游戏配置保持不变。" : game_profile_error( f->result ) );
+    if (ui && !f->automatic)
+    {
+        const char *reason = game_profile_error( f->result );
+        if (f->network == AUTORUN_UPDATE_NOT_FOUND) reason = "资源地址返回 404，请检查管理表地址或 Release 附件。";
+        else if (f->network == AUTORUN_UPDATE_NETWORK) reason = "HTTPS 请求失败，请查看 wine-nx-runtime.log 中的 [DOWNLOAD] 错误。";
+        else if (f->network == AUTORUN_UPDATE_HASH) reason = "下载内容的 SHA-256 与管理表不符。";
+        else if (f->network == AUTORUN_UPDATE_INVALID) reason = "下载内容的地址、大小或格式无效。";
+        else if (f->network == AUTORUN_UPDATE_IO) reason = "无法写入 SD 卡上的下载文件。";
+        ui_message( ui, f->package ? "适配包未下载" : "管理表未更新", reason );
+    }
     return 0;
 }
 static int choose_profile( struct ui *ui, const struct game_profile_catalog *catalog, const char *title )

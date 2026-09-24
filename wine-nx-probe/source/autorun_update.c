@@ -13,6 +13,8 @@
 
 #include "autorun_update.h"
 
+extern void wine_nx_runtime_trace( const char *message ) __attribute__((weak));
+
 #ifdef AUTORUN_RUNTIME_RELEASE_TAG
 #define RELEASE_API "https://cnb.cool/" AUTORUN_DEFAULT_REPOSITORY "/-/releases/tags/" AUTORUN_RUNTIME_RELEASE_TAG
 #define RUNTIME_ALLOW_PRERELEASE 1
@@ -159,6 +161,18 @@ static int set_https_options( CURL *curl )
         curl_easy_setopt( curl, CURLOPT_REDIR_PROTOCOLS, CURLPROTO_HTTPS )) return 0;
 #endif
     return 1;
+}
+
+static void trace_transfer_failure( const char *operation, CURLcode code, long status,
+                                    const char *detail )
+{
+    char message[512];
+    const char *reason = detail && detail[0] ? detail :
+                         code == CURLE_OK ? "HTTP response" : curl_easy_strerror( code );
+    if (!wine_nx_runtime_trace) return;
+    snprintf( message, sizeof(message), "[DOWNLOAD] %s failed: curl=%d (%s), http=%ld",
+              operation, (int)code, reason, status );
+    wine_nx_runtime_trace( message );
 }
 
 static void whitespace( struct parser *p )
@@ -524,13 +538,19 @@ static enum autorun_update_result request_metadata( const struct autorun_update_
     struct curl_slist *headers = NULL;
     struct transfer_progress progress = {callback, opaque, 0};
     long status = 0;
+    char curl_error[CURL_ERROR_SIZE] = "";
 
     memset( body, 0, sizeof(*body) );
-    if (curl_global_init( CURL_GLOBAL_DEFAULT ) != CURLE_OK || !(curl = curl_easy_init())) return AUTORUN_UPDATE_NETWORK;
+    if (curl_global_init( CURL_GLOBAL_DEFAULT ) != CURLE_OK || !(curl = curl_easy_init()))
+    {
+        trace_transfer_failure( "metadata setup", CURLE_FAILED_INIT, 0, NULL );
+        return AUTORUN_UPDATE_NETWORK;
+    }
     headers = curl_slist_append( headers, "Accept: application/vnd.cnb.api+json" );
     if (!headers || !set_https_options( curl ) ||
         curl_easy_setopt( curl, CURLOPT_TIMEOUT, source->timeout_seconds ? source->timeout_seconds : 45L ) ||
         curl_easy_setopt( curl, CURLOPT_URL, source->api ) ||
+        curl_easy_setopt( curl, CURLOPT_ERRORBUFFER, curl_error ) ||
         curl_easy_setopt( curl, CURLOPT_HTTPHEADER, headers ) ||
         curl_easy_setopt( curl, CURLOPT_WRITEFUNCTION, receive_memory ) ||
         curl_easy_setopt( curl, CURLOPT_WRITEDATA, body ) ||
@@ -542,6 +562,9 @@ static enum autorun_update_result request_metadata( const struct autorun_update_
     curl_slist_free_all( headers );
     curl_easy_cleanup( curl );
     if (progress.cancelled) return AUTORUN_UPDATE_CANCELLED;
+    if (code != CURLE_OK || status < 200 || status >= 300)
+        trace_transfer_failure( source->asset[0] ? "release metadata" : "profile index",
+                                code, status, curl_error );
     if (code != CURLE_OK) return AUTORUN_UPDATE_NETWORK;
     if (status == 404) return AUTORUN_UPDATE_NOT_FOUND;
     if (status < 200 || status >= 300) return AUTORUN_UPDATE_NETWORK;
@@ -618,6 +641,7 @@ enum autorun_update_result autorun_update_download_source( const struct autorun_
     CURL *curl = NULL;
     CURLcode code = CURLE_FAILED_INIT;
     long status = 0;
+    char curl_error[CURL_ERROR_SIZE] = "";
     enum autorun_update_result result = AUTORUN_UPDATE_NETWORK;
     if (!source || !source_component( source->cache, strlen( source->cache ) ) ||
         !release || !path || !path_size || !official_url( source, release->url ) ||
@@ -639,6 +663,7 @@ enum autorun_update_result autorun_update_download_source( const struct autorun_
         set_https_options( curl ) &&
         !curl_easy_setopt( curl, CURLOPT_TIMEOUT, source->timeout_seconds ? source->timeout_seconds : 900L ) &&
         !curl_easy_setopt( curl, CURLOPT_URL, release->url ) &&
+        !curl_easy_setopt( curl, CURLOPT_ERRORBUFFER, curl_error ) &&
         !curl_easy_setopt( curl, CURLOPT_WRITEFUNCTION, receive_file ) &&
         !curl_easy_setopt( curl, CURLOPT_WRITEDATA, &stream ) &&
         !curl_easy_setopt( curl, CURLOPT_NOPROGRESS, 0L ) &&
@@ -661,6 +686,15 @@ enum autorun_update_result autorun_update_download_source( const struct autorun_
         remove( final );
         result = rename( part, final ) ? AUTORUN_UPDATE_IO : AUTORUN_UPDATE_OK;
         if (result == AUTORUN_UPDATE_OK) snprintf( path, path_size, "%s", final );
+    }
+    if (result != AUTORUN_UPDATE_OK && result != AUTORUN_UPDATE_CANCELLED)
+    {
+        char detail[CURL_ERROR_SIZE + 96];
+        snprintf( detail, sizeof(detail), "%s; result=%d; bytes=%llu/%llu",
+                  curl_error[0] ? curl_error : code == CURLE_OK ? "HTTP response or local validation" : curl_easy_strerror( code ), result,
+                  stream.size, release->size );
+        trace_transfer_failure( source->asset[0] ? "release archive" : "profile archive",
+                                code, status, detail );
     }
     if (result != AUTORUN_UPDATE_OK) remove( part );
     return result;
