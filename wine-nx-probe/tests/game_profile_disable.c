@@ -1,4 +1,4 @@
-/* Targeted regression for both Zhao Yun profiles' hash-pinned local DirectDraw shim. */
+/* Targeted regression for hash-pinned local DirectDraw shim disabling. */
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,12 +27,11 @@ int main( int argc, char **argv )
     char target[768], backup[800], state[800], actual[65];
     int changed;
     struct game_profile_catalog *catalog = calloc( 1, sizeof(*catalog) );
-    assert( argc == 4 && catalog );
+    assert( argc == 5 && catalog );
     assert( game_profiles_load( argv[1], catalog ) == GAME_PROFILE_OK && catalog->count == 1 );
     assert( !strcmp( catalog->entries[0].id, argv[2] ) && catalog->entries[0].has_disable_file );
     assert( catalog->entries[0].min_api == (unsigned int)atoi( argv[3] ) );
-    assert( !strcmp( catalog->entries[0].disable_digest,
-                    "0279b2a2a8d8f208bb0d40131d6ae42cbee9c271f234cb4a25dac9914d0d27b4" ) );
+    assert( !strcmp( catalog->entries[0].disable_digest, argv[4] ) );
     game_profiles_clear( catalog ); free( catalog );
     assert( mkdtemp( folder ) );
     assert( realpath( folder, resolved ) );
@@ -67,6 +66,6 @@ int main( int argc, char **argv )
     assert( access( target, F_OK ) && file_digest( backup, actual ) && !strcmp( actual, digest ) );
     assert( game_profile_disable_restore( exe ) == GAME_PROFILE_OK && !access( target, F_OK ) );
     assert( !unlink( target ) && !rmdir( folder ) );
-    puts( "Zhao Yun disable rule: ZIP parse, absent file, hash gate, install, repeat, pre-disabled, restore, crash recovery passed" );
+    puts( "File disable rule: ZIP parse, absent file, hash gate, install, repeat, pre-disabled, restore, crash recovery passed" );
     return 0;
 }

@@ -38,7 +38,8 @@ GL_BACK 并执行交换，继续保留 GPU 路径。实机已确认直接载入�
 它曾在原环境成功加载，不能视为 Wine-NX 兼容性证据。Switch 实机上该 DLL
 虽能完成 hooks 安装，但随后使 `wined3d` 无法取得 GL context，并从
 `ddraw.dll` 的空函数指针崩溃。因此设备目录中必须停用这份本地 `DDraw.dll`，
-使用 Wine 内置 DirectDraw。
+使用 Wine 内置 DirectDraw。适配包 API 12 起按 SHA-256 核对游戏目录中的
+`DDraw.dll`，只对已验证的 DDrawCompat 文件执行可恢复的停用；未知文件保持不变。
 
 目录里的 `Data/Palgame.exe` 是另一份 2004 年、SHA-256 为
 `1536f7f04045214c3cc42bf360e6abc80479eb3b3c36509da350cbbee7684141` 的程序，
