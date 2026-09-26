@@ -8,11 +8,35 @@ from pathlib import PurePosixPath
 import re
 import shutil
 import tempfile
+import sys
 from types import SimpleNamespace
 from zipfile import ZipFile
 
 
 root = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(root / 'wine-nx-probe/tools'))
+from wine_components import component_targets
+
+database = '\n'.join(f'{directory}/{arch}-windows/{name}: source'
+                     for arch in ('i386', 'aarch64', 'arm64ec')
+                     for directory, name in (('dlls/ntdll', 'ntdll.dll'),
+                                             ('dlls/kernel32', 'kernel32.dll'),
+                                             ('dlls/avifil32', 'avifil32.dll'),
+                                             ('programs/reg', 'reg.exe'),
+                                             ('programs/winetest', 'winetest.exe')))
+for arch in ('i386', 'aarch64'):
+    targets = component_targets(database, arch)
+    assert {name for name, target in targets} == {'ntdll.dll', 'kernel32.dll', 'avifil32.dll', 'reg.exe'}
+    assert all(f'/{arch}-windows/' in target for name, target in targets)
+    for invalid in (database.replace(f'dlls/avifil32/{arch}-windows/avifil32.dll:', 'disabled:'),
+                    database + f'\ndlls/duplicate/{arch}-windows/ntdll.dll: source'):
+        try:
+            component_targets(invalid, arch)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('incomplete or colliding full component destinations accepted')
+print('PASS: full Wine component selection includes programs and AVI, excludes the test runner and other architectures, rejects omissions and collisions')
 package = root / 'wine-nx-probe/tools/package-amd64.py'
 selected = {'module_name', 'apiset', 'import_host', 'coff_blocks', 'imports', 'forwarders',
             'stage_closure', 'validate_external_imports'}

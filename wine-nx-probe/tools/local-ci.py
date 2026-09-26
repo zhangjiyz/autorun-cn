@@ -163,6 +163,17 @@ def verify_runtime(path, profiles, commit, index_url=None, release_tag=None):
         actual = {i.filename[len(prefix):] for i in archive.infolist() if not i.is_dir()}
         if actual != set(manifest['files']) | {'build-manifest.json'}:
             raise ValueError('Runtime manifest does not cover the complete archive')
+        if manifest['features'].get('full_components'):
+            for directory in ('system32', 'syswow64'):
+                names = manifest.get('full_components', {}).get(directory, [])
+                if (len(names) != len(set(names)) or
+                        not {'ntdll.dll', 'kernel32.dll', 'avifil32.dll'} <= set(names)):
+                    raise ValueError(f'Incomplete full component list: {directory}')
+                component_prefix = f'drive_c/windows/{directory}/'
+                present = {name[len(component_prefix):] for name in actual
+                           if name.startswith(component_prefix)}
+                if present - {'winenxaudio.drv'} != set(names):
+                    raise ValueError(f'Full component payload differs from its list: {directory}')
         for name, expected in manifest['files'].items():
             if hashlib.sha256(archive.read(prefix + name)).hexdigest() != expected:
                 raise ValueError(f'Runtime package hash mismatch: {name}')
@@ -358,6 +369,8 @@ def main():
             if args.mode == 'all':
                 metadata['runtime'] = verify_runtime(pending / 'autorun.zip', pending / 'autorun-profiles.tsv',
                                                      before['commit'], metadata['profile_index_url'], args.runtime_release_tag)
+                if metadata['runtime']['features'].get('full_components') is not True:
+                    raise ValueError('CI runtime must contain the full Wine component pack')
         after = source_state()
         if after != before:
             changed = sorted(name for name in before['files'].keys() | after['files'].keys()

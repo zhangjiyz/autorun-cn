@@ -153,6 +153,17 @@ with tempfile.TemporaryDirectory() as directory:
         raise AssertionError('invalid runtime accepted')
 
     assert ci.verify_runtime(archive(files, manifest), profiles, 'abc', release_tag='release-1') == manifest
+    full_names = ['avifil32.dll', 'kernel32.dll', 'ntdll.dll']
+    full_files = files | {f'drive_c/windows/{d}/{n}': b'component fixture'
+                          for d in ('system32', 'syswow64') for n in full_names}
+    full_manifest = manifest | {'features': manifest['features'] | {'full_components': True},
+                               'full_components': {d: full_names for d in ('system32', 'syswow64')},
+                               'files': {n: hashlib.sha256(data).hexdigest() for n, data in full_files.items()}}
+    assert ci.verify_runtime(archive(full_files, full_manifest), profiles, 'abc') == full_manifest
+    truncated = full_files.copy()
+    del truncated['drive_c/windows/syswow64/avifil32.dll']
+    reject(truncated, full_manifest | {'files': {n: hashlib.sha256(data).hexdigest() for n, data in truncated.items()}})
+    reject(full_files, full_manifest | {'full_components': {'system32': full_names, 'syswow64': full_names[:-1]}})
     try:
         ci.verify_runtime(archive(files, manifest), profiles, 'abc', release_tag='release-2')
     except ValueError:

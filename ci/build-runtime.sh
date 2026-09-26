@@ -39,6 +39,7 @@ sh "$probe/tools/bootstrap-lsfg-vk.sh"
     cd "$pe"
     /work/configure --enable-archs=aarch64,arm64ec,i386 \
         --enable-winebox64=aarch64 --enable-winebox64ec=arm64ec \
+        --enable-winegstreamer \
         --disable-tests --without-x --without-freetype --without-alsa --without-pulse \
         --without-dbus --without-fontconfig --without-udev --without-usb \
         --without-gstreamer --without-vulkan
@@ -62,7 +63,7 @@ python3 "$probe/tools/build-dxvk.py" --arch x86 --build "$out/dxvk-x86" --jobs "
 python3 "$probe/tools/build-vkd3d.py" --build "$out/vkd3d" --jobs "$jobs"
 python3 "$probe/tests/check_dxvk_requirements.py"
 python3 "$probe/tools/package-amd64.py" --pe "$pe" --build "$runtime" --jobs "$jobs" \
-    --vulkan --dxvk "$out/dxvk-amd64/payload" --vkd3d "$out/vkd3d/payload"
+    --full-components --vulkan --dxvk "$out/dxvk-amd64/payload" --vkd3d "$out/vkd3d/payload"
 # With no override, let the packager use the same default as the NRO.
 # An explicitly empty variable still requests the offline profile catalog.
 set --

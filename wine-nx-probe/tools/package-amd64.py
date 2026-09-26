@@ -14,6 +14,7 @@ from zipfile import ZipFile, ZIP_DEFLATED
 
 from dxvk_payload import DLLS as DXVK_DLLS, validate_payload
 from vkd3d_payload import DLLS as VKD3D_DLLS, validate_payload as validate_vkd3d_payload
+from wine_components import component_targets, configured_database, copy_library_licenses
 
 probe = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
@@ -22,6 +23,8 @@ parser.add_argument('--build', type=Path, default=probe / 'build-switch-amd64')
 parser.add_argument('--jobs', type=int, default=8)
 parser.add_argument('--no-build', action='store_true', help='Package existing DLLs without invoking make')
 parser.add_argument('--minimal', action='store_true', help='Only console smoke-test dependencies')
+parser.add_argument('--full-components', action='store_true',
+                    help='Build and include every configured Wine system component, like upstream')
 parser.add_argument('--vulkan', action='store_true', help='Include Vulkan DLLs for a mesa-switch runtime')
 parser.add_argument('--dxvk', type=Path, help='AMD64 payload produced by tools/build-dxvk.py (requires --vulkan)')
 parser.add_argument('--vkd3d', type=Path, help='AMD64 payload produced by tools/build-vkd3d.py (requires --dxvk)')
@@ -29,6 +32,8 @@ parser.add_argument('--interpreter-nro', type=Path, help='Include an interpreter
 args = parser.parse_args()
 if args.vulkan and args.minimal:
     parser.error('--vulkan requires the full GUI package')
+if args.full_components and args.minimal:
+    parser.error('--full-components requires the full GUI package')
 if args.dxvk and not args.vulkan:
     parser.error('--dxvk requires --vulkan')
 if args.vkd3d and not args.dxvk:
@@ -240,6 +245,30 @@ game_runtime = (
     'cfgmgr32', 'dwmapi', 'msvcp140', 'normaliz', 'powrprof', 'vcruntime140', 'wldap32',
     'x3daudio1_7', 'xapofx1_5',
 )
+full_components = {}
+if args.full_components:
+    database = configured_database(pe, env)
+    stripper = shutil.which('llvm-strip', path=env['PATH'])
+    if not stripper:
+        parser.error('Full components require llvm-strip')
+    for arch, directory in (('aarch64', 'system32'), ('i386', 'syswow64')):
+        targets = component_targets(database, arch)
+        if not args.no_build:
+            # Fail on any missing module instead of publishing a partial component pack.
+            run(['make', '-C', str(pe), f'-j{args.jobs}'] + [target for name, target in targets])
+        destination = stage / 'drive_c/windows' / directory
+        destination.mkdir(parents=True, exist_ok=True)
+        for name, target in targets:
+            path = pe / target
+            if not path.is_file():
+                raise ValueError(f'Missing full component: {path}')
+            info = inspect(path, '--file-headers')
+            expected = 'Arch: i386\n' if arch == 'i386' else 'IMAGE_FILE_MACHINE_ARM64'
+            if expected not in info and not (arch == 'aarch64' and 'IMAGE_FILE_MACHINE_AMD64' in info):
+                raise ValueError(f'Wrong full component architecture: {path}')
+            run([stripper, '--strip-debug', '-o', str(destination / name), str(path)])
+        full_components[directory] = [name for name, target in targets]
+        prebuilt.update((name, arch) for name, target in targets)
 common = 'ntdll kernel32 kernelbase msvcrt ucrtbase advapi32 sechost'.split()
 dxvk_paths = [args.dxvk / name for name in DXVK_DLLS] if args.dxvk else []
 vkd3d_paths = [args.vkd3d / name for name in VKD3D_DLLS] if args.vkd3d else []
@@ -264,6 +293,9 @@ prebuild(native_seeds, 'aarch64')
 native = stage_closure(native_seeds, 'aarch64', 'system32')
 prebuild(common, 'i386')
 guest = stage_closure(common, 'i386', 'syswow64')
+if args.full_components:
+    native.update(full_components['system32'])
+    guest.update(full_components['syswow64'])
 if not args.minimal:
     for compiler, directory, entry, modules in (
             ('x86_64', 'system32', 'DllMain', native),
@@ -368,6 +400,8 @@ if args.vulkan:
 shutil.copy2(probe / 'AMD64.md', stage / 'AMD64-README.md')
 licenses = stage / 'licenses'
 licenses.mkdir()
+if args.full_components:
+    copy_library_licenses(probe.parent, licenses / 'wine-libraries')
 if lsfg_revision:
     shutil.copy2(probe / 'vendor/lsfg-vk/LICENSE.md', licenses / 'LSFG-VK-GPL-3.0.txt')
     shutil.copy2(probe / 'lsfg/README.md', stage / 'LSFG-README.md')
@@ -391,6 +425,9 @@ if args.vkd3d:
 for directory, modules in (('system32', native), ('syswow64', guest)):
     for name in modules:
         path = stage / 'drive_c/windows' / directory / name
+        if args.full_components:
+            # Common dependencies are copied again by stage_closure; strip those too.
+            run([stripper, '--strip-debug', str(path)])
         missing = [dep for dep, symbols in imports(path) if not apiset(dep) and dep not in modules]
         if missing:
             raise ValueError(f'{path}: missing {missing}')
@@ -431,7 +468,9 @@ manifest = {
     'features': {'amd64': True, 'dynarec': enabled('WINE_NX_BOX64_DYNAREC'),
                  'vulkan': args.vulkan, 'dxvk': bool(args.dxvk), 'vkd3d': bool(args.vkd3d),
                  'lsfg': bool(lsfg_revision),
-                 'interpreter_fallback': bool(args.interpreter_nro)},
+                 'interpreter_fallback': bool(args.interpreter_nro),
+                 'full_components': args.full_components},
+    'full_components': full_components,
     'mesa_switch': mesa_revision,
     'dxvk': dxvk_manifest,
     'vkd3d': vkd3d_manifest,
