@@ -381,8 +381,9 @@ for test in ('smoke', 'functional', 'threads', 'lifecycle'):
 for name in ('fonts', 'nls'):
     destination = stage / 'share/wine' / name
     destination.mkdir(parents=True, exist_ok=True)
-    extension = '*.ttf' if name == 'fonts' else '*.nls'
-    resources = list((probe.parent / name).glob(extension))
+    extensions = ('.ttf', '.ttc') if name == 'fonts' else ('.nls',)
+    resources = sorted(path for path in (probe.parent / name).iterdir()
+                       if path.is_file() and path.suffix.lower() in extensions)
     if not resources:
         raise ValueError(f'Missing Wine {name} resources')
     for path in resources:
@@ -390,6 +391,8 @@ for name in ('fonts', 'nls'):
         if name == 'fonts':
             (drive / 'windows/fonts').mkdir(parents=True, exist_ok=True)
             shutil.copy2(path, drive / 'windows/fonts' / path.name)
+for name in ('windows-fonts.json', 'README.windows.md'):
+    shutil.copy2(probe.parent / 'fonts' / name, stage / 'share/wine/fonts' / name)
 shutil.copy2(nro, stage / 'wine-nx-runtime.nro')
 if args.interpreter_nro:
     shutil.copy2(args.interpreter_nro, stage / 'wine-nx-runtime-interpreter.nro')

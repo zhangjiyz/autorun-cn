@@ -1,0 +1,69 @@
+{
+  "source_catalog": "https://fs.microsoft.com/fs/windows/fontset-2017-04.json",
+  "files": [
+    {
+      "file": "simsun.ttc",
+      "source": "https://fs.microsoft.com/fs/windows/fonts/2756728883",
+      "size": 18214352,
+      "sha256": "ca2a6662eb28f02e80bcde33f3dfdd8dbf7369feae36f326b3661e2d9f84f865",
+      "families": [
+        "SimSun",
+        "NSimSun"
+      ],
+      "versions": [
+        "Version 5.15"
+      ]
+    },
+    {
+      "file": "simhei.ttf",
+      "source": "https://fs.microsoft.com/fs/windows/fonts/1752973205",
+      "size": 9753284,
+      "sha256": "239732dc801fcb5af27adc7725cca6b3010e16bad3114fa532aad117ea566548",
+      "families": [
+        "SimHei"
+      ],
+      "versions": [
+        "Version 5.03"
+      ]
+    },
+    {
+      "file": "msyh.ttc",
+      "source": "https://fs.microsoft.com/fs/windows/fonts/1744986300",
+      "size": 23648676,
+      "sha256": "d6a1a92bfd1249eccdd18a657189ed1f66704db429053b6d6c93b296eb9ef074",
+      "families": [
+        "Microsoft YaHei",
+        "Microsoft YaHei UI"
+      ],
+      "versions": [
+        "Version 6.23"
+      ]
+    },
+    {
+      "file": "msyhbd.ttc",
+      "source": "https://fs.microsoft.com/fs/windows/fonts/3931703833",
+      "size": 16246936,
+      "sha256": "0887451fa52c4685137a6df87720e607098ba81f14e7dd6f3d9c5319a558d59b",
+      "families": [
+        "Microsoft YaHei",
+        "Microsoft YaHei UI"
+      ],
+      "versions": [
+        "Version 6.23"
+      ]
+    },
+    {
+      "file": "msyhl.ttc",
+      "source": "https://fs.microsoft.com/fs/windows/fonts/4196271578",
+      "size": 12004804,
+      "sha256": "24c59b2dfc21a33ba764e9f01f451c70ad5357c7a8fe063858c6aee9717dcdd9",
+      "families": [
+        "Microsoft YaHei Light",
+        "Microsoft YaHei UI Light"
+      ],
+      "versions": [
+        "Version 6.21"
+      ]
+    }
+  ]
+}

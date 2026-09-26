@@ -51,6 +51,9 @@ CI 的 `all` 模式在 Release 和 Debug 构建中统一使用 `--full-component
 PE 配置显式保留 `winegstreamer.dll`，满足媒体组件的延迟导入；
 这不代表 Switch 已具备 GStreamer Unix 解码后端，视频播放仍需实测。
 组件去除调试信息，清单记录完整组件列表与每个文件的哈希，包内保留所用库的许可证。
+
+主程序包同时包含 `fonts/` 中原有 Wine 字体和宋体、新宋体、黑体、微软雅黑（常规、粗体及 Light，含 UI 字体）。
+`.ttf` 和 `.ttc` 均复制到 `share/wine/fonts/` 及 `drive_c/windows/fonts/`；来源和哈希见 `fonts/windows-fonts.json`。
 不会直接覆盖上游 x86 运行时使用的预编译 `system32`。
 Mesa 沿用上游 Ninja 并发策略；首次构建建议给 Docker 分配至少 12 GB 内存。
 首次完整编译可能需要较长时间。后续构建复用 Docker 层和构建目录。
