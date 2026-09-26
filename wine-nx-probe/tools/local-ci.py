@@ -99,35 +99,65 @@ def verify_profiles(index):
             raise ValueError(f'Game package differs from indexed release: {filename}')
         with ZipFile(path) as archive:
             entries = archive.infolist()
-            if (sum(e.file_size for e in entries) > 3 * 1024 * 1024
+            if (sum(e.file_size for e in entries) > 16 * 1024 * 1024
                     or any((e.external_attr >> 16) & 0o170000 == 0o120000 for e in entries)):
                 raise ValueError(f'Invalid profile ZIP entries: {filename}')
             if archive.testzip():
                 raise ValueError(f'Profile ZIP CRC validation failed: {filename}')
             catalog = archive.read('catalog.tsv').decode('utf-8').splitlines()
             if len(catalog) != 2 or catalog[0] not in ('autorun-profiles-v1', 'autorun-profiles-v2',
-                                                       'autorun-profiles-v3', 'autorun-profiles-v4'):
+                                                       'autorun-profiles-v3', 'autorun-profiles-v4', 'autorun-profiles-v5'):
                 raise ValueError(f'Profile ZIP must contain exactly one game: {filename}')
             columns = catalog[1].split('\t')
             schema_version = int(catalog[0][-1])
-            if len(columns) != (10 if schema_version == 4 else 9 if schema_version == 3 else
+            if len(columns) != (11 if schema_version == 5 else 10 if schema_version == 4 else 9 if schema_version == 3 else
                                 8 if schema_version == 2 else 6) or columns[:6] != fields[:6]:
                 raise ValueError(f'Profile ZIP metadata differs from index: {filename}')
             expected = {'catalog.tsv', f'{ident}/settings.txt', f'{ident}/keys.txt'}
             if schema_version >= 2:
-                if int(api) < 2 or any(flag not in ('0', '1') for flag in columns[6:]):
+                if int(api) < 2 or any(flag not in ('0', '1') for flag in columns[6:10]):
                     raise ValueError(f'Invalid profile feature flags: {filename}')
-                resources = (('cheats.txt', 'cover.png', 'patch.txt', 'disable.txt') if schema_version == 4 else
+                resources = (('cheats.txt', 'cover.png', 'patch.txt', 'disable.txt') if schema_version >= 4 else
                              ('cheats.txt', 'cover.png', 'patch.txt') if schema_version == 3 else
                              ('cheats.txt', 'cover.png'))
                 if schema_version >= 3 and columns[8] == '1' and int(api) < 3:
                     raise ValueError(f'Binary patch requires profile API 3: {filename}')
-                if schema_version == 4 and columns[9] == '1' and int(api) < 12 and not (
+                if schema_version >= 4 and columns[9] == '1' and int(api) < 12 and not (
                         ident == 'zhaoyunzhuan2' and int(api) >= 11):
                     raise ValueError(f'File disabling requires profile API 12: {filename}')
                 for flag, resource in zip(columns[6:], resources):
                     if flag == '1':
                         expected.add(f'{ident}/{resource}')
+            if schema_version == 5:
+                if not re.fullmatch('[0-8]', columns[10]):
+                    raise ValueError(f'Invalid replacement file count: {filename}')
+                count = int(columns[10])
+                if count:
+                    if int(api) < 13:
+                        raise ValueError(f'File replacement requires profile API 13: {filename}')
+                    manifest = archive.read(f'{ident}/files.tsv').decode('utf-8').splitlines()
+                    if not manifest or manifest[0] != 'autorun-profile-files-v1' or len(manifest) != count + 1:
+                        raise ValueError(f'Invalid replacement manifest: {filename}')
+                    expected.add(f'{ident}/files.tsv')
+                    destinations = set()
+                    for i, line in enumerate(manifest[1:]):
+                        parts = line.split('\t')
+                        if len(parts) != 4:
+                            raise ValueError(f'Invalid replacement manifest fields: {filename}')
+                        base, destination, length, file_digest = parts
+                        if (base not in ('game', 'drive_c') or not destination or len(destination.encode()) >= 256 or
+                                any(ord(c) < 32 or c in '\\:' for c in destination) or
+                                any(part in ('', '.', '..') or part.endswith((' ', '.')) for part in destination.split('/')) or
+                                (base, destination.casefold()) in destinations or
+                                not re.fullmatch('0|[1-9][0-9]*', length) or int(length) > 1024 * 1024 or
+                                not re.fullmatch('[0-9a-f]{64}', file_digest)):
+                            raise ValueError(f'Invalid replacement destination/size/hash: {filename}')
+                        destinations.add((base, destination.casefold()))
+                        resource = f'{ident}/files/{i}.bin'
+                        contents = archive.read(resource)
+                        if len(contents) != int(length) or hashlib.sha256(contents).hexdigest() != file_digest:
+                            raise ValueError(f'Replacement file differs from manifest: {filename}')
+                        expected.add(resource)
             if schema_version >= 3 and ident == 'pal3' and int(api) >= 7:
                 expected.update(f'pal3/{name}' for name in ('PAL3patch.conf', 'PAL3patch.dll', 'PAL3.dll'))
             if schema_version == 3 and ident == 'zhaoyunzhuan2' and int(api) >= 11:

@@ -24,7 +24,8 @@ static void sha256ContextGetHash( Sha256Context *c, void *out ) { SHA256_Final( 
 #endif
 
 #define CATALOG_LIMIT (128 * 1024)
-#define TARGET_COUNT 11
+#define TARGET_COUNT (12 + GAME_PROFILE_FILE_MAX)
+#define FILE_TARGET_START 12
 #define TEXT_TARGET_COUNT 7
 #define PAL3PATCH_CONFIG_MAX 65536
 #define PAL3PATCH_DLL_MAX (2 * 1024 * 1024)
@@ -33,7 +34,8 @@ static void sha256ContextGetHash( Sha256Context *c, void *out ) { SHA256_Final( 
 #define LEGACY_SNAPSHOT_MAGIC 0x31504647u
 #define OLD_SNAPSHOT_MAGIC 0x32504647u
 #define PREVIOUS_SNAPSHOT_MAGIC 0x33504647u
-#define SNAPSHOT_MAGIC 0x34504647u
+#define PAL3_SNAPSHOT_MAGIC 0x34504647u
+#define SNAPSHOT_MAGIC 0x35504647u
 
 static const char *pal3_raw_names[PAL3_RAW_COUNT] = {"PAL3patch.conf", "PAL3patch.dll", "PAL3.dll"};
 static const unsigned int pal3_raw_limits[PAL3_RAW_COUNT] = {PAL3PATCH_CONFIG_MAX, PAL3PATCH_DLL_MAX, PAL3_FORWARDER_MAX};
@@ -80,10 +82,11 @@ int game_profile_matches( const struct game_profile *profile, const char *query 
  * v4 declares file disabling explicitly; v3 keeps Zhao Yun 2's legacy rule. */
 static int parse_catalog( char *text, struct game_profile_catalog *catalog )
 {
-    char *line, *next, *field[10];
-    int v4 = !strncmp( text, "autorun-profiles-v4\n", 20 );
+    char *line, *next, *field[11];
+    int v5 = !strncmp( text, "autorun-profiles-v5\n", 20 );
+    int v4 = v5 || !strncmp( text, "autorun-profiles-v4\n", 20 );
     int v3 = v4 || !strncmp( text, "autorun-profiles-v3\n", 20 );
-    int v2 = v3 || !strncmp( text, "autorun-profiles-v2\n", 20 ), fields = v4 ? 10 : v3 ? 9 : v2 ? 8 : 6;
+    int v2 = v3 || !strncmp( text, "autorun-profiles-v2\n", 20 ), fields = v5 ? 11 : v4 ? 10 : v3 ? 9 : v2 ? 8 : 6;
     if (!v2 && strncmp( text, "autorun-profiles-v1\n", 20 )) return 0;
     line = text + 20;
     catalog->count = 0;
@@ -124,6 +127,10 @@ static int parse_catalog( char *text, struct game_profile_catalog *catalog )
                         (strcmp( field[0], "zhaoyunzhuan2" ) || p->min_api < 11)) return 0;
                 }
             }
+        }
+        if (v5 && strcmp( field[10], "0" ))
+        {
+            if (!positive_number( field[10], &p->file_count ) || p->file_count > GAME_PROFILE_FILE_MAX || p->min_api < 13) return 0;
         }
         for (int i = 0; i < catalog->count; i++) if (!strcmp( field[0], catalog->entries[i].id )) return 0;
         strcpy( p->id, field[0] ); strcpy( p->name, field[1] );
@@ -397,11 +404,86 @@ static int read_zip_cover( unzFile zip, struct game_profile *profile )
     return ok;
 }
 
+
+/* Package destinations are relative to a named root, never host absolute paths. */
+static int replacement_path( const char *root, const char *path )
+{
+    size_t n = strlen( path ), start = 0;
+    if ((strcmp( root, "game" ) && strcmp( root, "drive_c" )) || !n || n >= 256) return 0;
+    for (size_t i = 0; i <= n; i++)
+    {
+        unsigned char c = path[i];
+        if (c && (c < 32 || c == '\\' || c == ':')) return 0;
+        if (!c || c == '/')
+        {
+            size_t length = i - start;
+            if (!length || (length == 1 && path[start] == '.') ||
+                (length == 2 && !memcmp( path + start, "..", 2 )) || path[i - 1] == '.' || path[i - 1] == ' ') return 0;
+            start = i + 1;
+        }
+    }
+    return 1;
+}
+
+static int parse_file_manifest( char *text, struct game_profile *p )
+{
+    static const char header[] = "autorun-profile-files-v1\n";
+    if (strncmp( text, header, sizeof(header) - 1 )) return 0;
+    char *line = text + sizeof(header) - 1;
+    unsigned int i = 0;
+    while (*line)
+    {
+        char *next = strchr( line, '\n' ), *fields[4] = {line};
+        if (!next || i >= p->file_count) return 0;
+        *next++ = 0;
+        for (unsigned int j = 1; j < 4; j++)
+        {
+            char *tab = strchr( fields[j - 1], '\t' );
+            if (!tab) return 0;
+            *tab = 0; fields[j] = tab + 1;
+        }
+        struct game_profile_file *f = &p->files[i];
+        unsigned int size = 0;
+        if (strchr( fields[3], '\t' ) || !replacement_path( fields[0], fields[1] ) ||
+            (strcmp( fields[2], "0" ) && !positive_number( fields[2], &size )) || size > GAME_PROFILE_FILE_SIZE_MAX ||
+            strlen( fields[3] ) != 64 || strspn( fields[3], "0123456789abcdef" ) != 64) return 0;
+        for (unsigned int j = 0; j < i; j++)
+            if (!strcmp( fields[0], p->files[j].root ) && !strcasecmp( fields[1], p->files[j].path )) return 0;
+        strcpy( f->root, fields[0] ); strcpy( f->path, fields[1] ); strcpy( f->digest, fields[3] ); f->size = size;
+        i++; line = next;
+    }
+    return i == p->file_count;
+}
+
+static int read_zip_replacement( unzFile zip, struct game_profile_file *f )
+{
+    unz_file_info64 info;
+    if (unzGetCurrentFileInfo64( zip, &info, NULL, 0, NULL, 0, NULL, 0 ) != UNZ_OK ||
+        info.uncompressed_size != f->size || (info.flag & 1) || (info.external_fa & 0x10) ||
+        (((info.external_fa >> 16) & 0170000) && ((info.external_fa >> 16) & 0170000) != 0100000)) return 0;
+    unsigned char *data = malloc( f->size + 1 ), hash[SHA256_HASH_SIZE];
+    if (!data) return 0;
+    if (unzOpenCurrentFile( zip ) != UNZ_OK) { free( data ); return 0; }
+    unsigned int used = 0;
+    int n;
+    while (used < f->size && (n = unzReadCurrentFile( zip, data + used, f->size - used )) > 0) used += n;
+    unsigned char extra;
+    int ok = used == f->size && unzReadCurrentFile( zip, &extra, 1 ) == 0;
+    ok = unzCloseCurrentFile( zip ) == UNZ_OK && ok;
+    Sha256Context context;
+    sha256ContextCreate( &context ); sha256ContextUpdate( &context, data, used ); sha256ContextGetHash( &context, hash );
+    char hex[65];
+    for (unsigned int i = 0; i < sizeof(hash); i++) sprintf( hex + i * 2, "%02x", hash[i] );
+    if (!ok || strcmp( hex, f->digest )) { free( data ); return 0; }
+    f->data = data; return 1;
+}
+
 void game_profiles_clear( struct game_profile_catalog *catalog )
 {
     for (int i = 0; i < GAME_PROFILE_MAX; i++)
     {
         free( catalog->entries[i].cover );
+        for (unsigned int k = 0; k < GAME_PROFILE_FILE_MAX; k++) free( catalog->entries[i].files[k].data );
         for (unsigned int k = 0; k < PAL3_RAW_COUNT; k++) free( catalog->entries[i].raw_files[k] );
     }
     memset( catalog, 0, sizeof(*catalog) );
@@ -411,21 +493,31 @@ enum game_profile_result game_profiles_load( const char *archive, struct game_pr
 {
     unzFile zip = unzOpen64( archive );
     unz_global_info64 global;
-    unsigned char seen[GAME_PROFILE_MAX][6 + PAL3_RAW_COUNT] = {{0}};
+    unsigned char seen[GAME_PROFILE_MAX][7 + PAL3_RAW_COUNT + GAME_PROFILE_FILE_MAX] = {{0}};
     char *text = malloc( CATALOG_LIMIT );
     struct launcher_kv *raw = malloc( sizeof(*raw) );
     struct game_cheats *cheats = malloc( sizeof(*cheats) );
     enum game_profile_result result = GAME_PROFILE_INVALID;
     int index_count = 0, next, expected_count = 1;
-    unsigned long long cover_total = 0;
+    unsigned long long cover_total = 0, file_total = 0;
     game_profiles_clear( catalog );
     if (!zip || !text || !raw || !cheats) { result = GAME_PROFILE_IO; goto done; }
     if (unzGetGlobalInfo64( zip, &global ) != UNZ_OK || !global.number_entry ||
-        global.number_entry > 1 + GAME_PROFILE_MAX * (6 + PAL3_RAW_COUNT) || unzLocateFile( zip, "catalog.tsv", 1 ) != UNZ_OK ||
+        global.number_entry > 1 + GAME_PROFILE_MAX * (7 + PAL3_RAW_COUNT + GAME_PROFILE_FILE_MAX) || unzLocateFile( zip, "catalog.tsv", 1 ) != UNZ_OK ||
         !read_zip_text( zip, text, CATALOG_LIMIT ) || !parse_catalog( text, catalog )) goto done;
     for (int i = 0; i < catalog->count; i++) expected_count += 2 + catalog->entries[i].has_cheats +
         catalog->entries[i].has_cover + catalog->entries[i].has_patch + catalog->entries[i].has_disable_file +
-        PAL3_RAW_COUNT * catalog->entries[i].has_raw_files;
+        PAL3_RAW_COUNT * catalog->entries[i].has_raw_files +
+        (catalog->entries[i].file_count ? 1 + catalog->entries[i].file_count : 0);
+    for (int i = 0; i < catalog->count; i++) if (catalog->entries[i].file_count)
+    {
+        char manifest[128];
+        snprintf( manifest, sizeof(manifest), "%s/files.tsv", catalog->entries[i].id );
+        if (unzLocateFile( zip, manifest, 1 ) != UNZ_OK || !read_zip_text( zip, text, CATALOG_LIMIT ) ||
+            !parse_file_manifest( text, &catalog->entries[i] )) goto done;
+        for (unsigned int j = 0; j < catalog->entries[i].file_count; j++) file_total += catalog->entries[i].files[j].size;
+        if (file_total > GAME_PROFILE_FILE_MAX * GAME_PROFILE_FILE_SIZE_MAX) goto done;
+    }
     if (global.number_entry != (unsigned)expected_count || unzGoToFirstFile( zip ) != UNZ_OK) goto done;
     do
     {
@@ -435,17 +527,28 @@ enum game_profile_result game_profiles_load( const char *archive, struct game_pr
         if (unzGetCurrentFileInfo64( zip, &info, name, sizeof(name), NULL, 0, NULL, 0 ) != UNZ_OK ||
             info.size_filename >= sizeof(name) || strlen( name ) != info.size_filename) goto done;
         if (!strcmp( name, "catalog.tsv" )) { if (++index_count != 1) goto done; continue; }
-        for (int i = 0; i < catalog->count && !found; i++) for (int k = 0; k < 6 + PAL3_RAW_COUNT; k++)
+        for (int i = 0; i < catalog->count && !found; i++) for (int k = 0; k < 7 + PAL3_RAW_COUNT + GAME_PROFILE_FILE_MAX; k++)
         {
             struct game_profile *p = &catalog->entries[i];
             static const char *files[] = {"settings.txt", "keys.txt", "cheats.txt", "cover.png", "patch.txt", "disable.txt"};
             if ((k == 2 && !p->has_cheats) || (k == 3 && !p->has_cover) ||
                 (k == 4 && !p->has_patch) || (k == 5 && !p->has_disable_file) ||
-                (k >= 6 && !p->has_raw_files)) continue;
-            snprintf( expected, sizeof(expected), "%s/%s", p->id, k < 6 ? files[k] : pal3_raw_names[k - 6] );
+                (k >= 6 && k < 9 && !p->has_raw_files) ||
+                (k >= 9 && (!p->file_count || (k >= 10 && (unsigned int)(k - 10) >= p->file_count)))) continue;
+            if (k >= 10) snprintf( expected, sizeof(expected), "%s/files/%d.bin", p->id, k - 10 );
+            else snprintf( expected, sizeof(expected), "%s/%s", p->id,
+                           k < 6 ? files[k] : k < 9 ? pal3_raw_names[k - 6] : "files.tsv" );
             if (strcmp( name, expected )) continue;
             if (seen[i][k]++) goto done;
-            if (k == 3)
+            if (k >= 10)
+            {
+                if (!read_zip_replacement( zip, &p->files[k - 10] )) goto done;
+            }
+            else if (k == 9)
+            {
+                if (!read_zip_text( zip, text, CATALOG_LIMIT )) goto done;
+            }
+            else if (k == 3)
             {
                 cover_total += info.uncompressed_size;
                 if (cover_total > 16 * 1024 * 1024 || !read_zip_cover( zip, p )) goto done;
@@ -484,6 +587,12 @@ enum game_profile_result game_profiles_load( const char *archive, struct game_pr
             seen[i][5] != catalog->entries[i].has_disable_file) goto done;
     for (int i = 0; i < catalog->count; i++) for (unsigned int k = 0; k < PAL3_RAW_COUNT; k++)
         if (seen[i][6 + k] != catalog->entries[i].has_raw_files) goto done;
+    for (int i = 0; i < catalog->count; i++)
+    {
+        struct game_profile *p = &catalog->entries[i];
+        if (seen[i][9] != !!p->file_count) goto done;
+        for (unsigned int k = 0; k < p->file_count; k++) if (!seen[i][10 + k]) goto done;
+    }
     result = GAME_PROFILE_OK;
  done:
     if (zip) unzClose( zip );
@@ -495,33 +604,42 @@ enum game_profile_result game_profiles_load( const char *archive, struct game_pr
 struct snapshot
 {
     uint32_t magic, crc, count, exists[TARGET_COUNT], sizes[TARGET_COUNT];
+    char file_roots[GAME_PROFILE_FILE_MAX][16], file_paths[GAME_PROFILE_FILE_MAX][256];
     char data[TEXT_TARGET_COUNT][LAUNCHER_KV_MAX];
     char cover[GAME_PROFILE_COVER_MAX];
     char pal3patch_config[PAL3PATCH_CONFIG_MAX];
     unsigned char pal3patch_dll[PAL3PATCH_DLL_MAX];
     unsigned char pal3_dll[PAL3_FORWARDER_MAX];
+    char file_map[LAUNCHER_KV_MAX];
+    unsigned char file_data[GAME_PROFILE_FILE_MAX][GAME_PROFILE_FILE_SIZE_MAX + 1];
 };
 
 #define SNAP_DATA(s, i) ((i) == 7 ? (void *)(s)->cover : (i) == 8 ? (void *)(s)->pal3patch_config : \
-                         (i) == 9 ? (void *)(s)->pal3patch_dll : (i) == 10 ? (void *)(s)->pal3_dll : (void *)(s)->data[i])
+                         (i) == 9 ? (void *)(s)->pal3patch_dll : (i) == 10 ? (void *)(s)->pal3_dll : \
+                         (i) == 11 ? (void *)(s)->file_map : (i) >= FILE_TARGET_START ? (void *)(s)->file_data[(i) - FILE_TARGET_START] : (void *)(s)->data[i])
 
 static unsigned int snapshot_limit( unsigned int i )
 {
     return i == 7 ? GAME_PROFILE_COVER_MAX + 1 : i == 8 ? PAL3PATCH_CONFIG_MAX :
-           i == 9 ? PAL3PATCH_DLL_MAX : i == 10 ? PAL3_FORWARDER_MAX : LAUNCHER_KV_MAX;
+           i == 9 ? PAL3PATCH_DLL_MAX : i == 10 ? PAL3_FORWARDER_MAX : i >= FILE_TARGET_START ? GAME_PROFILE_FILE_SIZE_MAX + 1 : LAUNCHER_KV_MAX;
 }
 
-struct targets { char paths[TARGET_COUNT][768], pending[800], backup[800]; };
+struct targets
+{
+    char paths[TARGET_COUNT][768], pending[800], backup[800];
+    char file_roots[GAME_PROFILE_FILE_MAX][16], file_paths[GAME_PROFILE_FILE_MAX][256];
+};
 
 static int target_paths( struct targets *t, const char *settings, const char *keys )
 {
+    memset( t, 0, sizeof(*t) );
     const char *suffixes[] = {"", "", ".adaptation", ".profile-settings", ".profile-keys", ".cheats", ".cheat-options", ".profile-cover.png"};
     for (int i = 0; i < 8; i++)
         if (snprintf( t->paths[i], sizeof(t->paths[i]), "%s%s", i == 1 ? keys : settings, suffixes[i] ) >= (int)sizeof(t->paths[i])) return 0;
     const char *name = strrchr( settings, '/' );
     name = name ? name + 1 : settings;
     if (strcasecmp( name, "PAL3.wine-nx.txt" ))
-        for (int i = 8; i < TARGET_COUNT; i++) t->paths[i][0] = 0;
+        for (int i = 8; i < 11; i++) t->paths[i][0] = 0;
     else
     {
         size_t parent_len = (size_t)(name - settings);
@@ -532,6 +650,7 @@ static int target_paths( struct targets *t, const char *settings, const char *ke
             strcpy( t->paths[8 + i] + parent_len, pal3_raw_names[i] );
         }
     }
+    if (snprintf( t->paths[11], sizeof(t->paths[11]), "%s.profile-files", settings ) >= (int)sizeof(t->paths[11])) return 0;
     snprintf( t->pending, sizeof(t->pending), "%s.profile-pending", settings );
     snprintf( t->backup, sizeof(t->backup), "%s.profile-backup", settings );
     return 1;
@@ -877,6 +996,121 @@ enum game_profile_result game_profile_disable_restore( const char *exe )
     return erase_durable( state ) ? GAME_PROFILE_OK : GAME_PROFILE_RECOVERY;
 }
 
+
+static int replacement_target( const struct targets *t, const char *root, const char *relative, char *out, size_t capacity )
+{
+    char base[768];
+    if (!replacement_path( root, relative )) return 0;
+    if (!strcmp( root, "game" ))
+    {
+        strcpy( base, t->paths[0] );
+        char *slash = strrchr( base, '/' );
+        if (slash) *slash = 0; else strcpy( base, "." );
+    }
+    else
+    {
+#ifdef __SWITCH__
+        strcpy( base, "sdmc:/switch/wine/drive_c" );
+#else
+        const char *component = strstr( t->paths[0], "/drive_c/" );
+        if (!component) return 0;
+        size_t length = component - t->paths[0] + strlen("/drive_c");
+        memcpy( base, t->paths[0], length ); base[length] = 0;
+#endif
+    }
+    return snprintf( out, capacity, "%s/%s", base, relative ) < (int)capacity;
+}
+
+/* Reject aliases between roots, profile state and atomic-write temporary paths. */
+static int targets_add_file( struct targets *t, const char *root, const char *relative )
+{
+    char path[768], temporary[800];
+    if (!replacement_target( t, root, relative, path, sizeof(path) )) return -1;
+    for (unsigned int i = 0; i < GAME_PROFILE_FILE_MAX; i++)
+        if (!strcmp( t->file_roots[i], root ) && !strcasecmp( t->file_paths[i], relative )) return i;
+    for (unsigned int i = 0; i < TARGET_COUNT; i++) if (t->paths[i][0])
+    {
+        snprintf( temporary, sizeof(temporary), "%s.new", t->paths[i] );
+        size_t old_length = strlen( t->paths[i] ), new_length = strlen( path );
+        if (!strcasecmp( t->paths[i], path ) || !strcasecmp( temporary, path ) ||
+            (new_length > old_length && !strncasecmp( path, t->paths[i], old_length ) && path[old_length] == '/') ||
+            (old_length > new_length && !strncasecmp( t->paths[i], path, new_length ) && t->paths[i][new_length] == '/')) return -1;
+        snprintf( temporary, sizeof(temporary), "%s.new", path );
+        if (!strcasecmp( temporary, t->paths[i] )) return -1;
+    }
+    const char *state[] = {t->pending, t->backup};
+    for (unsigned int i = 0; i < 2; i++)
+    {
+        snprintf( temporary, sizeof(temporary), "%s.new", state[i] );
+        if (!strcasecmp( path, state[i] ) || !strcasecmp( path, temporary )) return -1;
+    }
+    for (unsigned int i = 0; i < GAME_PROFILE_FILE_MAX; i++) if (!t->file_paths[i][0])
+    {
+        strcpy( t->file_roots[i], root ); strcpy( t->file_paths[i], relative );
+        strcpy( t->paths[FILE_TARGET_START + i], path ); return i;
+    }
+    return -1;
+}
+
+static int targets_load_files( struct targets *t )
+{
+    char text[LAUNCHER_KV_MAX]; uint32_t size, exists;
+    static const char header[] = "autorun-profile-targets-v1\n";
+    if (!read_local( t->paths[11], text, &size, &exists )) return 0;
+    if (!exists) return 1;
+    if (strncmp( text, header, sizeof(header) - 1 )) return 0;
+    char *line = text + sizeof(header) - 1;
+    unsigned int count = 0;
+    while (*line)
+    {
+        char *next = strchr( line, '\n' ), *tab = strchr( line, '\t' );
+        if (!next || !tab || tab >= next || ++count > GAME_PROFILE_FILE_MAX) return 0;
+        *next++ = 0; *tab++ = 0;
+        if (targets_add_file( t, line, tab ) < 0) return 0;
+        line = next;
+    }
+    return count > 0;
+}
+
+static int snapshot_file_targets( struct targets *t, const struct snapshot *s )
+{
+    memset( t->file_roots, 0, sizeof(t->file_roots) ); memset( t->file_paths, 0, sizeof(t->file_paths) );
+    for (unsigned int i = FILE_TARGET_START; i < TARGET_COUNT; i++) t->paths[i][0] = 0;
+    int ended = 0;
+    for (unsigned int i = 0; i < GAME_PROFILE_FILE_MAX; i++)
+    {
+        if (!memchr( s->file_roots[i], 0, sizeof(s->file_roots[i]) ) ||
+            !memchr( s->file_paths[i], 0, sizeof(s->file_paths[i]) )) return 0;
+        if (!s->file_paths[i][0])
+        {
+            if (s->file_roots[i][0] || s->exists[FILE_TARGET_START + i] || s->sizes[FILE_TARGET_START + i]) return 0;
+            ended = 1; continue;
+        }
+        if (ended || targets_add_file( t, s->file_roots[i], s->file_paths[i] ) != (int)i) return 0;
+    }
+    return 1;
+}
+
+/* A missing nested folder is an absent original file. Create it only on write. */
+static int replacement_parents( const char *path, int create )
+{
+    char copy[1024]; struct stat st;
+    if (strlen( path ) >= sizeof(copy)) return 0;
+    strcpy( copy, path );
+    for (size_t i = 1; copy[i]; i++) if (copy[i] == '/' && copy[i - 1] != ':')
+    {
+        copy[i] = 0;
+        if (lstat( copy, &st ))
+        {
+            if (errno != ENOENT || (create && mkdir( copy, 0777 ))) return 0;
+        }
+        else if (!S_ISDIR( st.st_mode ) || S_ISLNK( st.st_mode )) return 0;
+        copy[i] = '/';
+    }
+    if (!lstat( path, &st )) return S_ISREG( st.st_mode ) && !S_ISLNK( st.st_mode );
+    return errno == ENOENT;
+}
+
 static uint32_t snapshot_crc( const struct snapshot *s )
 {
     uint32_t crc = crc32( 0, (const void *)&s->count, offsetof(struct snapshot, data) - offsetof(struct snapshot, count) );
@@ -951,13 +1185,30 @@ static int snapshot_read( const char *path, struct snapshot *s )
         s->crc = snapshot_crc( s );
         goto done;
     }
+    if (magic == PAL3_SNAPSHOT_MAGIC)
+    {
+        struct pal3_header { uint32_t magic, crc, count, exists[11], sizes[11]; } old;
+        if (fread( &old, 1, sizeof(old), file ) != sizeof(old) || old.count != 11) goto done;
+        s->magic = SNAPSHOT_MAGIC; s->count = 11;
+        memcpy( s->exists, old.exists, sizeof(old.exists) ); memcpy( s->sizes, old.sizes, sizeof(old.sizes) );
+        uint32_t crc = crc32( 0, (const void *)&old.count, sizeof(old) - offsetof(struct pal3_header, count) );
+        for (unsigned int i = 0; i < s->count; i++)
+        {
+            if (s->exists[i] > 1 || (!s->exists[i] && s->sizes[i]) || s->sizes[i] >= snapshot_limit( i ) ||
+                fread( SNAP_DATA(s, i), 1, s->sizes[i], file ) != s->sizes[i] ||
+                ((i < 7 || i == 8) && memchr( SNAP_DATA(s, i), 0, s->sizes[i] ))) goto done;
+            crc = crc32( crc, SNAP_DATA(s, i), s->sizes[i] );
+        }
+        ok = fgetc( file ) == EOF && !ferror( file ) && old.crc == crc;
+        s->crc = snapshot_crc( s ); goto done;
+    }
     if (magic != SNAPSHOT_MAGIC || fread( s, 1, offsetof(struct snapshot, data), file ) != offsetof(struct snapshot, data) ||
         s->count != TARGET_COUNT) goto done;
     for (unsigned int i = 0; i < s->count; i++)
     {
         if (s->exists[i] > 1 || (!s->exists[i] && s->sizes[i]) || s->sizes[i] >= snapshot_limit( i )) goto done;
         if (fread( SNAP_DATA(s, i), 1, s->sizes[i], file ) != s->sizes[i] ||
-            ((i < 7 || i == 8) && memchr( SNAP_DATA(s, i), 0, s->sizes[i] ))) goto done;
+            ((i < 7 || i == 8 || i == 11) && memchr( SNAP_DATA(s, i), 0, s->sizes[i] ))) goto done;
     }
     ok = fgetc( file ) == EOF && !ferror( file ) && s->crc == snapshot_crc( s );
  done:
@@ -979,7 +1230,13 @@ static int snapshot_write( const char *path, const struct snapshot *s )
 
 static int snapshot_capture( const struct targets *t, struct snapshot *s )
 {
+    struct targets resolved = *t;
+    if (!targets_load_files( &resolved )) return 0;
+    t = &resolved;
     memset( s, 0, sizeof(*s) ); s->magic = SNAPSHOT_MAGIC; s->count = TARGET_COUNT;
+    memcpy( s->file_roots, t->file_roots, sizeof(s->file_roots) );
+    memcpy( s->file_paths, t->file_paths, sizeof(s->file_paths) );
+    if (!read_local( t->paths[11], s->file_map, &s->sizes[11], &s->exists[11] )) return 0;
     for (int i = 0; i < TEXT_TARGET_COUNT; i++)
         if (!read_local( t->paths[i], s->data[i], &s->sizes[i], &s->exists[i] )) return 0;
     FILE *file;
@@ -991,9 +1248,10 @@ static int snapshot_capture( const struct targets *t, struct snapshot *s )
         if (!ok) return 0;
     }
     else if (errno != ENOENT) return 0;
-    for (unsigned int i = 8; i < TARGET_COUNT && t->paths[i][0]; i++)
+    for (unsigned int i = 8; i < TARGET_COUNT; i++)
     {
-        if (!safe_path( t->paths[i] )) return 0;
+        if (i == 11 || !t->paths[i][0]) continue;
+        if (i >= FILE_TARGET_START ? !replacement_parents( t->paths[i], 0 ) : !safe_path( t->paths[i] )) return 0;
         if ((file = fopen( t->paths[i], "rb" )))
         {
             s->sizes[i] = fread( SNAP_DATA(s, i), 1, snapshot_limit( i ), file );
@@ -1011,11 +1269,23 @@ static int snapshot_capture( const struct targets *t, struct snapshot *s )
 
 static int snapshot_apply( const struct targets *t, const struct snapshot *s, const struct snapshot *previous )
 {
+    struct targets resolved = *t;
+    if (!snapshot_file_targets( &resolved, s )) return 0;
+    for (unsigned int i = FILE_TARGET_START; i < TARGET_COUNT; i++)
+        if (resolved.paths[i][0] && !replacement_parents( resolved.paths[i], 0 )) return 0;
+    t = &resolved;
     for (unsigned int i = 0; i < s->count; i++)
     {
         if (i >= 8 && !t->paths[i][0]) { if (s->exists[i]) return 0; else continue; }
         if (previous && previous->exists[i] == s->exists[i] && previous->sizes[i] == s->sizes[i] &&
             !memcmp( SNAP_DATA(previous, i), SNAP_DATA(s, i), s->sizes[i] )) continue;
+        if (i >= FILE_TARGET_START)
+        {
+            if (!replacement_parents( t->paths[i], s->exists[i] )) return 0;
+            /* Restoring an originally absent file below absent folders is a no-op. */
+            struct stat st;
+            if (!s->exists[i] && lstat( t->paths[i], &st ) && errno == ENOENT) continue;
+        }
         if (!safe_path( t->paths[i] )) return 0;
         if (s->exists[i]) { if (!durable_write( t->paths[i], SNAP_DATA(s, i), s->sizes[i] )) return 0; }
         else if (!erase_durable( t->paths[i] )) return 0;
@@ -1146,6 +1416,10 @@ enum game_profile_result game_profile_apply( const char *settings, const char *k
             if (!profile->raw_files[i] || !profile->raw_sizes[i] ||
                 profile->raw_sizes[i] >= pal3_raw_limits[i]) return GAME_PROFILE_INVALID;
     }
+    if (profile->file_count > GAME_PROFILE_FILE_MAX || (profile->file_count && profile->min_api < 13)) return GAME_PROFILE_INVALID;
+    for (unsigned int i = 0; i < profile->file_count; i++)
+        if (!profile->files[i].data || profile->files[i].size > GAME_PROFILE_FILE_SIZE_MAX ||
+            !replacement_path( profile->files[i].root, profile->files[i].path )) return GAME_PROFILE_INVALID;
     if (profile->min_api > GAME_PROFILE_API) return GAME_PROFILE_INCOMPATIBLE;
     if ((result = game_profile_binding_read( settings, &binding )) != GAME_PROFILE_OK) return result;
     first = strcmp( binding.id, profile->id ) || strcmp( binding.repository, repository ) || strcmp( binding.tag, tag );
@@ -1153,6 +1427,10 @@ enum game_profile_result game_profile_apply( const char *settings, const char *k
     result = GAME_PROFILE_IO;
     if (!target_paths( &t, settings, keys ) || !(before = malloc( sizeof(*before) )) ||
         !(after = malloc( sizeof(*after) )) || !(kv = malloc( sizeof(*kv) )) || !(old = malloc( sizeof(*old) )) ) goto done;
+    if (!targets_load_files( &t )) goto done;
+    for (unsigned int i = 0; i < profile->file_count; i++)
+        if (targets_add_file( &t, profile->files[i].root, profile->files[i].path ) < 0)
+        { result = GAME_PROFILE_INVALID; goto done; }
     if (!snapshot_capture( &t, before )) goto done;
     *after = *before;
     for (int i = 0; i < 2; i++)
@@ -1176,6 +1454,25 @@ enum game_profile_result game_profile_apply( const char *settings, const char *k
             if (!t.paths[target][0]) { result = GAME_PROFILE_INVALID; goto done; }
             after->sizes[target] = profile->raw_sizes[j]; after->exists[target] = 1;
             memcpy( SNAP_DATA(after, target), profile->raw_files[j], profile->raw_sizes[j] );
+        }
+    }
+    if (profile->file_count)
+    {
+        size_t used = snprintf( after->file_map, sizeof(after->file_map), "autorun-profile-targets-v1\n" );
+        for (unsigned int i = 0; i < GAME_PROFILE_FILE_MAX && t.file_paths[i][0]; i++)
+        {
+            int n = snprintf( after->file_map + used, sizeof(after->file_map) - used, "%s\t%s\n", t.file_roots[i], t.file_paths[i] );
+            if (n < 0 || (size_t)n >= sizeof(after->file_map) - used) goto done;
+            used += n;
+        }
+        after->sizes[11] = used; after->exists[11] = 1;
+        for (unsigned int i = 0; i < profile->file_count; i++)
+        {
+            int slot = targets_add_file( &t, profile->files[i].root, profile->files[i].path );
+            if (slot < 0) goto done;
+            unsigned int target = FILE_TARGET_START + slot;
+            after->sizes[target] = profile->files[i].size; after->exists[target] = 1;
+            memcpy( SNAP_DATA(after, target), profile->files[i].data, profile->files[i].size );
         }
     }
     memset( kv, 0, sizeof(*kv) );

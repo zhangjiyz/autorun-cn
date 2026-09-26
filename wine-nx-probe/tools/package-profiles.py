@@ -19,6 +19,37 @@ PAL3_RAW_FILES = {
     'PAL3patch.dll': (2 * 1024 * 1024, '242ae1786f99e8c61bf6c8449d91ab5f30e5f81e4d602cdadb8388e26c46c385'),
     'PAL3.dll': (65536, 'ca26da00f7081ca05b9698de55d86949fd97e92a0627e0854b291eb503fe3545'),
 }
+FILE_MAX = 8
+FILE_SIZE_MAX = 1024 * 1024
+
+
+def replacement_path(root, path):
+    if root not in ('game', 'drive_c') or not isinstance(path, str):
+        raise ValueError('file root must be game or drive_c')
+    if (not path or len(path.encode('utf-8')) >= 256 or
+            any(ord(c) < 32 or c in '\\:' for c in path) or
+            any(part in ('', '.', '..') or part.endswith((' ', '.')) for part in path.split('/'))):
+        raise ValueError('file destination must be a safe relative path')
+    return root, path
+
+
+def replacement_files(root, items):
+    if not isinstance(items, list) or not 1 <= len(items) <= FILE_MAX:
+        raise ValueError('file replacements must contain 1 to 8 entries')
+    seen, entries = set(), []
+    for item in items:
+        if not isinstance(item, dict) or set(item) != {'root', 'path', 'source'}:
+            raise ValueError('file replacement requires root, path and source')
+        base, path = replacement_path(item['root'], item['path'])
+        key = (base, path.casefold())
+        if key in seen:
+            raise ValueError('duplicate file replacement destination')
+        seen.add(key)
+        data = resource(root, item['source'])
+        if len(data) > FILE_SIZE_MAX:
+            raise ValueError('replacement file exceeds 1 MiB')
+        entries.append((base, path, data, hashlib.sha256(data).hexdigest()))
+    return entries
 
 
 KEYS = set('LSTICK RSTICK DPAD TOUCH UP DOWN LEFT RIGHT LUP LDOWN LLEFT LRIGHT RUP RDOWN RLEFT RRIGHT '
@@ -199,14 +230,14 @@ def build(catalog_path, output, selected=None):
     v3 = catalog['schema'] >= 3
     # Keep existing independent packages on v3. A package declaring the new
     # generic file-disable capability gets an explicit v4 feature column.
-    wire_schema = 4 if v3 and any('disable_file' in entry and type(entry.get('min_api')) is int and
+    wire_schema = 5 if v3 and any('files' in entry for entry in entries) else 4 if v3 and any('disable_file' in entry and type(entry.get('min_api')) is int and
                                   entry['min_api'] >= 12
                                   for entry in entries) else catalog['schema']
     lines = [f'autorun-profiles-v{wire_schema}\n']
     files, ids = {}, set()
     for entry in entries:
         required = {'id', 'name', 'version', 'min_api', 'keywords', 'description', 'settings', 'keys'}
-        optional = ({'cheats', 'cover', 'url'} if v2 else set()) | ({'binary_patch', 'raw_files', 'disable_file'} if v3 else set())
+        optional = ({'cheats', 'cover', 'url'} if v2 else set()) | ({'binary_patch', 'raw_files', 'disable_file', 'files'} if v3 else set())
         if not required <= set(entry) or set(entry) - required - optional:
             raise ValueError('unexpected or missing profile fields')
         ident = field(entry['id'], 64, 'id')
@@ -223,7 +254,7 @@ def build(catalog_path, output, selected=None):
             raise ValueError('PAL3 API 7 requires the three patch files')
         if wire_schema == 3 and ('disable_file' in entry) != (ident == 'zhaoyunzhuan2' and entry['min_api'] >= 11):
             raise ValueError('v3 only supports Zhao Yun 2 file disabling')
-        if wire_schema == 4 and 'disable_file' in entry and entry['min_api'] < 12 and not (
+        if wire_schema >= 4 and 'disable_file' in entry and entry['min_api'] < 12 and not (
                 ident == 'zhaoyunzhuan2' and entry['min_api'] >= 11):
             raise ValueError('generic file disabling requires profile API 12')
         if v3 and ident == 'zhaoyunzhuan2' and entry['min_api'] >= 11 and 'disable_file' not in entry:
@@ -239,8 +270,19 @@ def build(catalog_path, output, selected=None):
             columns += [str(int('binary_patch' in entry))]
             if 'binary_patch' in entry and entry['min_api'] < 3:
                 raise ValueError('binary patches require min_api >= 3')
-        if wire_schema == 4:
+        if wire_schema >= 4:
             columns.append(str(int('disable_file' in entry)))
+        replacements = replacement_files(catalog_path.parent, entry['files']) if 'files' in entry else []
+        if replacements and entry['min_api'] < 13:
+            raise ValueError('file replacements require min_api >= 13')
+        if wire_schema == 5:
+            columns.append(str(len(replacements)))
+        if replacements:
+            manifest = 'autorun-profile-files-v1\n'
+            for i, (base, path, content, digest) in enumerate(replacements):
+                manifest += f'{base}\t{path}\t{len(content)}\t{digest}\n'
+                files[f'{ident}/files/{i}.bin'] = content
+            files[f'{ident}/files.tsv'] = manifest.encode('utf-8')
         lines.append('\t'.join(columns) + '\n')
         if 'cheats' in entry:
             files[f'{ident}/cheats.txt'] = cheats(catalog_path.parent, entry['cheats'])
@@ -271,6 +313,8 @@ def build(catalog_path, output, selected=None):
                             not match or int(match[1]) >= 1280 or int(match[2]) >= 720):
                             raise ValueError('fixed clicks require a compatible API, a physical button, and 1280x720 coordinates')
             files[f'{ident}/{kind}.txt'] = data
+    if sum(len(data) for name, data in files.items() if '/files/' in name) > FILE_MAX * FILE_SIZE_MAX:
+        raise ValueError('total replacement files exceed 8 MiB')
     if sum(len(data) for name, data in files.items() if name.endswith('/cover.png')) > 16 * 1024 * 1024:
         raise ValueError('total covers exceed 16 MiB')
     files['catalog.tsv'] = ''.join(lines).encode('utf-8')

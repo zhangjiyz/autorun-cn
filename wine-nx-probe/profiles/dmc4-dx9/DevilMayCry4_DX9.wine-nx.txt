@@ -1,0 +1,5 @@
+d3d=dxvk
+title=鬼泣4（原版 DX9）
+windows=compositor
+own-controls=1
+verbose=0

@@ -104,6 +104,64 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
               '-O1', '-g', '-fsanitize=undefined', '-fno-omit-frame-pointer', '-I' + str(PROBE / 'source')]
     if 'clang' not in subprocess.check_output([common[0], '--version'], text=True).lower():
         common.append('-Wno-format-truncation')
+
+    # Generic replacements use both game-relative and C:-relative destinations.
+    files_entry = json.loads(json.dumps(data['profiles'][0]))
+    files_entry.update(id='file-test', min_api=13)
+    files_entry.pop('cheats', None); files_entry.pop('cover', None)
+    payloads = [b'new\0game', b'new user\r\n', b'new nested', b'']
+    destinations = [('game', 'config.ini'), ('drive_c', 'users/steamuser/AppData/Local/CAPCOM/TEST/config.ini'),
+                    ('game', 'nested/new.bin'), ('game', 'empty.ini')]
+    files_entry['files'] = []
+    for i, ((base, path), contents) in enumerate(zip(destinations, payloads)):
+        (maintenance / f'file-{i}.bin').write_bytes(contents)
+        files_entry['files'].append(dict(root=base, path=path, source=f'file-{i}.bin'))
+    files_catalog = dict(schema=3, profiles=[files_entry])
+    files_mapping = maintenance / 'file-catalog.json'; files_mapping.write_text(json.dumps(files_catalog))
+    files_zip = root / 'files-valid.zip'; pack.build(files_mapping, files_zip)
+    with ZipFile(files_zip) as archive:
+        file_entries = {name: archive.read(name) for name in archive.namelist()}
+    assert file_entries['catalog.tsv'].startswith(b'autorun-profiles-v5\n')
+    assert file_entries['file-test/files/1.bin'] == payloads[1]
+    file_bad = []
+    def invalid_files(name, changed):
+        output = root / f'files-{name}.zip'
+        with ZipFile(output, 'w', compression=ZIP_DEFLATED) as archive:
+            for path, contents in changed:
+                archive.writestr(path, contents)
+        file_bad.append(output)
+    manifest_name = 'file-test/files.tsv'
+    for name, old, new in [('traversal', b'game\tconfig.ini', b'game\t../config.ini'),
+                           ('absolute', b'game\tconfig.ini', b'game\t/config.ini'),
+                           ('bad-root', b'game\tconfig.ini', b'host\tconfig.ini'),
+                           ('backslash', b'game\tconfig.ini', b'game\tfoo\\config.ini'),
+                           ('drive', b'game\tconfig.ini', b'game\tC:/config.ini'),
+                           ('duplicate', b'game\tnested/new.bin', b'game\tCONFIG.INI')]:
+        invalid_files(name, [(path, contents.replace(old, new) if path == manifest_name else contents)
+                             for path, contents in file_entries.items()])
+    invalid_files('hash', [(path, b'corrupt' if path == 'file-test/files/0.bin' else contents)
+                          for path, contents in file_entries.items()])
+    invalid_files('missing', [(path, contents) for path, contents in file_entries.items() if path != 'file-test/files/1.bin'])
+    invalid_files('extra', list(file_entries.items()) + [('file-test/files/4.bin', b'extra')])
+    invalid_files('api', [(path, contents.replace(b'\t13\t', b'\t12\t') if path == 'catalog.tsv' else contents)
+                         for path, contents in file_entries.items()])
+    for destination in ('../outside', '/outside', 'C:/outside', 'foo\\bar', 'foo//bar', 'foo/./bar', 'foo./bar'):
+        broken = json.loads(json.dumps(files_catalog)); broken['profiles'][0]['files'][0]['path'] = destination
+        files_mapping.write_text(json.dumps(broken))
+        try: pack.build(files_mapping, root / 'bad-files-output.zip')
+        except ValueError: pass
+        else: raise AssertionError('unsafe replacement mapping accepted')
+    files_mapping.write_text(json.dumps(files_catalog))
+    ci_spec = importlib.util.spec_from_file_location('files_release_check', PROBE / 'tools/local-ci.py')
+    ci_module = importlib.util.module_from_spec(ci_spec); ci_spec.loader.exec_module(ci_module)
+    files_release = root / 'files-release'
+    pack.build_release(files_mapping, files_release)
+    assert ci_module.verify_profiles(files_release / 'autorun-profiles.tsv')[0]['min_api'] == 13
+    files_core = root / 'files-core'
+    run(*common, PROBE / 'tests/game_profile_files.c', PROBE / 'source/game_cheats.c',
+        *flags('minizip', 'libpng', 'openssl'), '-lz', '-o', files_core)
+    run(files_core, files_zip, *file_bad)
+
     disable = root / 'disable'
     run(*common, PROBE / 'tests/game_profile_disable.c', PROBE / 'source/game_cheats.c',
         *flags('minizip', 'libpng', 'openssl'), '-lz', '-o', disable)
@@ -129,7 +187,7 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
     legacy = json.loads(json.dumps(data)); legacy['schema'] = 1
     for entry in legacy['profiles']:
         entry.pop('cheats', None); entry.pop('cover', None); entry.pop('binary_patch', None)
-        entry.pop('raw_files', None); entry.pop('disable_file', None); entry['min_api'] = 1
+        entry.pop('raw_files', None); entry.pop('disable_file', None); entry.pop('files', None); entry['min_api'] = 1
     legacy_keys = maintenance / 'pal3/PAL3.keys.txt'
     current_keys = legacy_keys.read_text()
     legacy_keys.write_text(re.sub(r'^X=click:\d+,\d+(?:,[12])?$', 'X=0x0d', current_keys,
