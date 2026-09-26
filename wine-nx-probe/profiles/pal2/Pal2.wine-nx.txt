@@ -1,5 +1,6 @@
 title=仙剑奇侠传二
 d3d=wine
+wined3d-frontbuffer-swap=1
 own-controls=1
 controller=keyboard
 verbose=0

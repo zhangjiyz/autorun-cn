@@ -8,9 +8,15 @@
 - 游戏说明文件标注版本：1.05
 
 主程序使用 DirectDraw、DirectInput、DirectInput 8、Bink 和 Miles Sound System。
-首版配置使用 Wine DirectDraw、4:3 等比居中、简体中文区域设置和独立键盘映射，
-同时启用 SD 文件状态缓存及干净写句柄读取缓存。没有启用新仙剑 XP 版专用的
-`wined3d-frontbuffer-swap`；只有实机出现视频后黑屏或主表面不提交时才应单独验证。
+配置使用 Wine DirectDraw、4:3 等比居中、简体中文区域设置和独立键盘映射，
+同时启用 SD 文件状态缓存及干净写句柄读取缓存。
+适配包 v2 新增 `wined3d-frontbuffer-swap=1`，用于修复进入战斗后画面停止更新的问题。
+
+2026-09-26 真机测试中，进入战斗时画面停止更新，操作和声音仍在。
+诊断日志确认计时继续前进，OpenGL 呈现帧数停止；展开代码和内存显示已进入战斗模块。
+仅增加 `wined3d-frontbuffer-swap=1` 后，用户确认战斗画面恢复正常，因此保留该设置。
+该开关对本游戏启用 DirectDraw 主表面显式呈现及 Flip 链 CPU 副本更新；
+目前尚未通过进一步单变量测试区分两项处理各自的必要性，也未完成长时间战斗、存读档等验收。
 
 游戏本体必须完整复制。`Pal2.exe` 同目录至少要保留 `BINKW32.DLL`、
 `MSS32.DLL`、`CHINA.DLL`、`Mp3dec.asi`、`Mss16.dll`、`keyboard.dat` 和
