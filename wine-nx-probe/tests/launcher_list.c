@@ -41,7 +41,7 @@ static void test_program_args(void)
     assert( launcher_keys_path( "sdmc:/x/a.exe", path, 19 ) && !strcmp( path, "sdmc:/x/a.keys.txt" ) );
     assert( !launcher_keys_path( "sdmc:/x/readme.txt", path, sizeof(path) ) );
     assert( launcher_command_line( "C:\\openttd\\openttd.exe", "-s null -m null", line, sizeof(line) ) );
-    assert( !strcmp( line, "C:\\openttd\\openttd.exe -s null -m null" ) );
+    assert( !strcmp( line, "\"C:\\openttd\\openttd.exe\" -s null -m null" ) );
     assert( launcher_command_line( "C:\\Program Files\\a.exe", "-x", line, sizeof(line) ) );
     assert( !strcmp( line, "\"C:\\Program Files\\a.exe\" -x" ) );
     assert( !launcher_command_line( "C:\\openttd\\openttd.exe", "-v win32:no_threads -s null -m null -r 1280x720", line, 40 ) );

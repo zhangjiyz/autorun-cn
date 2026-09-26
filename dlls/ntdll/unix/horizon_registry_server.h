@@ -4,10 +4,12 @@
 #include <time.h>
 #include <unistd.h>
 
-/* Where system.reg and user.reg live; the host test uses a scratch directory. */
+/* The runtime's folder: system.reg and user.reg are in its registry/, the
+ * classes the payload ships in config/. The host test uses a scratch folder. */
 #ifndef HORIZON_REGISTRY_DIR
 #define HORIZON_REGISTRY_DIR "sdmc:/switch/wine/"
 #endif
+#include "horizon_registry_paths.h"
 
 static long long horizon_registry_now(void)
 {
@@ -191,7 +193,7 @@ static int horizon_registry_write_snapshot( const char *name, const char *data, 
 
 int horizon_registry_flush(void)
 {
-    static const char *const names[] = { "system.reg", "user.reg" };
+    static const char *const names[] = { HORIZON_REGISTRY_SUBDIR "system.reg", HORIZON_REGISTRY_SUBDIR "user.reg" };
     static const char *const roots[] = { "\\\\Machine", "\\\\User\\\\S-1-5-21-0-0-0-1000" };
     unsigned int i;
     int success = 1;
@@ -315,8 +317,9 @@ static unsigned int horizon_registry_init(void)
      * before system.reg, so anything a program has written for itself since
      * still wins. */
     horizon_registry_load_hive( machine, "config/classes.reg" );
-    horizon_registry_load_hive( machine, "system.reg" );
-    horizon_registry_load_hive( user, "user.reg" );
+    horizon_registry_move_hives( HORIZON_REGISTRY_DIR );
+    horizon_registry_load_hive( machine, HORIZON_REGISTRY_SUBDIR "system.reg" );
+    horizon_registry_load_hive( user, HORIZON_REGISTRY_SUBDIR "user.reg" );
     horizon_registry_hives[0] = machine;
     horizon_registry_hives[1] = user;
     memset( horizon_registry_generation, 0, sizeof(horizon_registry_generation) );
@@ -370,6 +373,41 @@ unsigned int horizon_registry_flush_key( unsigned int handle )
     return horizon_registry_flush() ? 0 : 0xc0000001u; /* STATUS_UNSUCCESSFUL */
 }
 
+/* Verbose runs name every key opened and value read, with what came of it:
+ * the [SYSCALL] lines give a status and nothing else, which leaves a program
+ * that gives up on a missing key saying only that something was missing. A
+ * name that is not ASCII is written as \u escapes so it can be compared with
+ * the one on the card. */
+extern int wine_nx_runtime_verbose __attribute__((weak));
+extern void wine_nx_runtime_trace( const char *msg ) __attribute__((weak));
+
+static unsigned int horizon_registry_trace_name( char *out, unsigned int at, unsigned int max,
+                                                 const unsigned short *name, unsigned int len )
+{
+    unsigned int i;
+
+    for (i = 0; i < len / 2 && at + 7 < max; i++)
+    {
+        if (name[i] >= 0x20 && name[i] < 0x7f) out[at++] = (char)name[i];
+        else at += snprintf( out + at, max - at, "\\u%04x", name[i] );
+    }
+    out[at < max ? at : max - 1] = 0;
+    return at;
+}
+
+/* The key's own path from the root, for a value read under it. */
+static unsigned int horizon_registry_trace_path( char *out, unsigned int at, unsigned int max,
+                                                 const struct horizon_reg_key *key )
+{
+    if (!key) return at;
+    if (key->parent)
+    {
+        at = horizon_registry_trace_path( out, at, max, key->parent );
+        if (at + 1 < max) out[at++] = '\\';
+    }
+    return horizon_registry_trace_name( out, at, max, key->name, key->namelen );
+}
+
 static int horizon_server_handle_registry( struct horizon_server_connection *connection,
                                            const unsigned char *message,
                                            const unsigned char *data, unsigned int data_size )
@@ -387,6 +425,10 @@ static int horizon_server_handle_registry( struct horizon_server_connection *con
     struct horizon_server_handle_entry *entry;
     unsigned char *out = NULL;
     unsigned int status, size = 0, max = header->reply_size;
+    int tracing = &wine_nx_runtime_verbose && wine_nx_runtime_verbose && &wine_nx_runtime_trace;
+    char trace[512];
+    unsigned int trace_at = 0;
+    trace[0] = 0;
     memset( &reply, 0, sizeof(reply) );
     /* Bound peer-controlled allocations; regular values can be fetched in
      * smaller buffers with the full required length returned in the reply. */
@@ -432,6 +474,17 @@ static int horizon_server_handle_registry( struct horizon_server_connection *con
             status = horizon_reg_create( &horizon_registry, base, name, len, attributes,
                                          options, class, classlen, &key );
         else status = horizon_reg_open( &horizon_registry, base, name, len, attributes, &key );
+        if (tracing)
+        {
+            trace_at = snprintf( trace, sizeof(trace), "[REG] %s ",
+                                 header->req == HORIZON_REQ_CREATE_KEY ? "create" : "open" );
+            if (base)
+            {
+                trace_at = horizon_registry_trace_path( trace, trace_at, sizeof(trace), base );
+                if (trace_at + 1 < sizeof(trace)) trace[trace_at++] = '\\';
+            }
+            trace_at = horizon_registry_trace_name( trace, trace_at, sizeof(trace), name, len );
+        }
         if (!key) goto done;
         if (!(entry = horizon_server_create_handle_locked( HORIZON_SERVER_OBJECT_REG_KEY )))
         {
@@ -481,6 +534,13 @@ static int horizon_server_handle_registry( struct horizon_server_connection *con
     case HORIZON_REQ_GET_KEY_VALUE:
         status = horizon_reg_get_value( key, (const void *)data, data_size, &reply.value.type,
                                         &reply.value.total, out, max, &size );
+        if (tracing)
+        {
+            trace_at = snprintf( trace, sizeof(trace), "[REG] query " );
+            trace_at = horizon_registry_trace_path( trace, trace_at, sizeof(trace), key );
+            if (trace_at + 3 < sizeof(trace)) { trace[trace_at++] = ' '; trace[trace_at++] = ':'; trace[trace_at++] = ' '; }
+            trace_at = horizon_registry_trace_name( trace, trace_at, sizeof(trace), (const void *)data, data_size );
+        }
         break;
     case HORIZON_REQ_ENUM_KEY_VALUE:
     {
@@ -513,6 +573,11 @@ static int horizon_server_handle_registry( struct horizon_server_connection *con
     }
 done:
     pthread_mutex_unlock( &horizon_server_objects_mutex );
+    if (trace[0])
+    {
+        if (trace_at + 16 < sizeof(trace)) snprintf( trace + trace_at, sizeof(trace) - trace_at, " -> %08x", status );
+        wine_nx_runtime_trace( trace );
+    }
     reply.header.error = status;
     reply.header.reply_size = size;
     status = horizon_server_write_reply( connection->reply_fd, &reply, sizeof(reply), out, size );

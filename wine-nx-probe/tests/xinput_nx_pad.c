@@ -4,11 +4,18 @@
 #include <string.h>
 
 #include "../source/xinput_unix.c"
+#include "../source/key_names.h"
 
 static int mock_connected;
 static u64 mock_buttons, mock_tick;
 static HidAnalogStickState mock_sticks[2];
 static unsigned int mock_pad_updates;
+static unsigned short mock_face_keys[4];
+
+unsigned short wine_nx_xinput_face_key( unsigned int button )
+{
+    return button < 4 ? mock_face_keys[button] : 0;
+}
 
 void padConfigureInput(int count, int style) { assert(count == 1 && style == HidNpadStyleSet_NpadStandard); }
 void padInitializeDefault(PadState *pad) { (void)pad; }
@@ -17,10 +24,26 @@ int padIsConnected(PadState *pad) { (void)pad; return mock_connected; }
 HidAnalogStickState padGetStickPos(PadState *pad, int index) { (void)pad; return mock_sticks[index]; }
 u64 padGetButtons(PadState *pad) { (void)pad; return mock_buttons; }
 u64 armGetSystemTick(void) { return mock_tick; }
+static int mock_keyboard;
+int wine_nx_osk_visible( void ) { return mock_keyboard; }
 
 int main(void)
 {
     XINPUT_GAMEPAD gamepad;
+
+    /* These are selectable and named in the same mapping editor. */
+    {
+        unsigned int target;
+        int control;
+
+        for (target = WINE_NX_GAMEPAD_A; target <= WINE_NX_GAMEPAD_Y; target++)
+        {
+            assert(wine_nx_key_index(target) >= 0);
+            for (control = 0; control < WINE_NX_CONTROL_COUNT; control++)
+                assert(wine_nx_control_key_allowed(control, target) == (control < 4));
+        }
+        assert(wine_nx_control_key_allowed(6, 0x0d));
+    }
 
     /* Nothing held, sticks centred. */
     memset( &gamepad, 0xcc, sizeof(gamepad) );
@@ -77,6 +100,46 @@ int main(void)
         assert(state.connected && state.state.Gamepad.wButtons == XINPUT_GAMEPAD_A);
         assert(state.state.Gamepad.bRightTrigger == 255 && state.state.Gamepad.sThumbLX == 123);
         assert(wine_nx_xinput_last_poll == mock_tick);
+        /* The existing keys file can directly name native gamepad actions.
+         * Every combination must survive both native and WoW64 calls. */
+        {
+            unsigned int bits, abi;
+            DWORD previous_packet = state.state.dwPacketNumber;
+
+            for (bits = 0; bits < 4; bits++) mock_face_keys[bits] = WINE_NX_GAMEPAD_A + bits;
+            for (abi = 0; abi < 2; abi++)
+                for (bits = 0; bits < 16; bits++)
+                {
+                    mock_buttons = bits | NX_PAD_L | NX_PAD_ZR;
+                    (abi ? wine_nx_xinput_wow64_unix_funcs : wine_nx_xinput_unix_funcs)[nx_xinput_get_state](&state);
+                    assert(state.connected);
+                    assert(state.state.Gamepad.wButtons == (bits << 12 | XINPUT_GAMEPAD_LEFT_SHOULDER));
+                    assert(state.state.Gamepad.bRightTrigger == 255 && state.state.Gamepad.bLeftTrigger == 0);
+                    assert(state.state.Gamepad.sThumbLX == 123 && state.state.Gamepad.sThumbLY == -456);
+                    assert(state.state.Gamepad.sThumbRX == 789 && state.state.Gamepad.sThumbRY == -1234);
+                }
+            assert(state.state.dwPacketNumber > previous_packet);
+            /* Two sources for one action must keep it pressed together. */
+            mock_face_keys[1] = WINE_NX_GAMEPAD_A;
+            mock_buttons = NX_PAD_A | NX_PAD_B;
+            wine_nx_xinput_unix_funcs[nx_xinput_get_state](&state);
+            assert(state.state.Gamepad.wButtons == XINPUT_GAMEPAD_A);
+            /* Keyboard, mouse and unset entries retain the old gamepad layout. */
+            mock_face_keys[0] = 0x1b;
+            mock_face_keys[1] = 0x0d;
+            mock_face_keys[2] = WINE_NX_MOUSE_LEFT;
+            mock_face_keys[3] = 0;
+            mock_buttons = NX_PAD_B | NX_PAD_X | NX_PAD_ZR;
+            wine_nx_xinput_unix_funcs[nx_xinput_get_state](&state);
+            assert(state.state.Gamepad.wButtons == (XINPUT_GAMEPAD_A | XINPUT_GAMEPAD_Y));
+        }
+        /* The floating keyboard has the controller while it is up: still
+         * there, nothing held. */
+        mock_keyboard = 1;
+        wine_nx_xinput_unix_funcs[nx_xinput_get_state](&state);
+        assert(state.connected && !state.state.Gamepad.wButtons && !state.state.Gamepad.bRightTrigger &&
+               !state.state.Gamepad.sThumbLX);
+        mock_keyboard = 0;
         wine_nx_xinput_unix_funcs[nx_xinput_set_state](&vibration);
         assert(vibration.connected);
         state.index = 1;
@@ -107,6 +170,6 @@ int main(void)
         assert(state.connected && wine_nx_xinput_last_poll == mock_tick);
     }
 
-    puts( "XInput Switch pad: mapping, native and WoW64 tables, 64-bit call pointer and layout passed" );
+    puts( "XInput Switch pad: mapping, native and WoW64 tables, 64-bit call pointer, layout and the floating keyboard passed" );
     return 0;
 }

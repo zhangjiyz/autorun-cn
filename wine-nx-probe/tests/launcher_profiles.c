@@ -8,7 +8,7 @@
 #include "launcher.h"
 #include "autorun_update.h"
 
-static int menu_step, filter_step, applied, latest, restored, prompts, default_source_check;
+static int menu_step, filter_step, applied, latest, restored, prompts, resumed, default_source_check;
 static char settings_path[768];
 int ui_begin_frame( struct ui *ui ) { return ui->running; }
 int ui_poll( struct ui *ui, struct ui_input *input ) { (void)ui; (void)input; return 0; }
@@ -19,10 +19,13 @@ void ui_header( struct ui *ui, const char *title, const char *subtitle ) { (void
 void ui_text_centered( struct ui *ui, TTF_Font *font, int cx, int y, const char *text, SDL_Color color )
 { (void)ui; (void)font; (void)cx; (void)y; (void)text; (void)color; }
 void ui_present( struct ui *ui ) { (void)ui; }
+void ui_resume_after_prompt( struct ui *ui ) { (void)ui; resumed++; }
 int launcher_platform_prompt( const char *header, const char *initial, char *out, size_t size )
 {
     (void)header; (void)initial;
-    snprintf( out, size, "%s", prompts++ ? "新仙剑" : "nothing-matches" ); return 1;
+    int attempt = prompts++;
+    if (attempt == 1) return 0; /* Cancel must leave the existing filter intact. */
+    snprintf( out, size, "%s", attempt ? "新仙剑" : "nothing-matches" ); return 1;
 }
 void ui_message( struct ui *ui, const char *title, const char *text )
 {
@@ -53,8 +56,9 @@ enum ui_action ui_list_run( struct ui *ui, struct ui_list *list, const char *tit
         case 0: assert( count >= 3 ); list->selection = 0; return UI_ACTION_CHOOSE;
         case 1: assert( count == 2 && rows[1].disabled && rows[0].adjustable ); list->selection = 0; return UI_ACTION_RESET;
         case 2: assert( count >= 3 ); list->selection = 0; return UI_ACTION_CHOOSE;
-        case 3: assert( count == 3 && strstr( rows[1].label, "新仙剑" ) && !rows[1].disabled ); list->selection = 1; return UI_ACTION_CHOOSE;
-        case 4: assert( count >= 3 && strstr( rows[1].label, "新仙剑" ) && !rows[1].disabled ); list->selection = 1; return UI_ACTION_CHOOSE;
+        case 3: assert( count >= 3 && !strcmp( rows[0].value, "全部适配包" ) ); list->selection = 0; return UI_ACTION_CHOOSE;
+        case 4: assert( count == 3 && strstr( rows[1].label, "新仙剑" ) && !rows[1].disabled ); list->selection = 1; return UI_ACTION_CHOOSE;
+        case 5: assert( count >= 3 && strstr( rows[1].label, "新仙剑" ) && !rows[1].disabled ); list->selection = 1; return UI_ACTION_CHOOSE;
         default: assert( 0 );
         }
     }
@@ -125,7 +129,8 @@ int main( int argc, char **argv )
     file = fopen( config_path, "w" ); assert( file );
     assert( fputs( "index-url=\nauto-update=1\n", file ) >= 0 ); assert( !fclose( file ) );
     launcher_profiles_open( &ui, argv[1], exe, "Test game" );
-    assert( menu_step == 5 && filter_step == 5 && applied == 2 && latest == 1 && restored == 1 );
+    assert( menu_step == 5 && filter_step == 6 && applied == 2 && latest == 1 && restored == 1 );
+    assert( resumed == prompts && prompts == 3 );
     assert( access( settings_path, F_OK ) == 0 );
     /* Rebind offline, then provide a newer table + only this game's ZIP.
      * Automatic checks must preserve edits and never fetch another game. */

@@ -2,6 +2,8 @@
 
 维护者只编辑 [`catalog.json`](catalog.json) 这一张游戏映射表，每个游戏仍有自己的配置、按键、可选金手指和封面文件。发布工具自动生成一张在线管理表 `autorun-profiles.tsv`，以及每游戏一个独立 ZIP。TSV 是生成物，不需要手动维护第二张表。
 
+当前八款适配包均包含 `address-space=32-bit`，安装后的游戏配置明确要求 32 位地址空间。需要已安装 Autorun 32-bit 转发器；新配置随适配包应用，修改源码不会直接更新设备或之前生成的安装 ZIP。此设置只指定地址空间，图形后端仍按各游戏自己的 `d3d` 配置选择。
+
 ## 玩家操作
 
 主程序 **设置 → 系统 → 适配包管理**：
@@ -13,7 +15,7 @@
 单游戏 **游戏配置 → 常规 → 适配包更新**：
 
 1. 首次在“选择 / 更换适配包”按名称、关键词筛选，核对适用版本后确认。
-2. 只下载选中的那个游戏 ZIP，并记录管理表地址、游戏 ID 和版本。
+2. 优先使用校验值匹配的内置游戏 ZIP；缺少或版本变化时，只下载选中的那个游戏 ZIP，并记录管理表地址、游戏 ID 和版本。
 3. “检查此游戏适配包更新”只查这个 ID；相同版本或旧版本不会重装。
 4. “恢复上次配置”恢复上一次安装前的配置、按键、金手指、封面和绑定。若希望持续使用旧版，应先关闭自动更新。
 
@@ -135,7 +137,7 @@ index-url=https://cnb.cool/PalmMuse/autorun-cn/-/releases/latest/download/autoru
 auto-update=1
 ```
 
-`index-url=` 为空表示离线；`auto-update=0` 关闭自动更新。完整安装包只内置同一管理表，不附带所有游戏 ZIP。若需离线首次应用，把选定游戏的独立 ZIP 手动放入 `switch/wine/profiles/`，文件名保持不变。`package-autorun.py --profile-repository` 与 `--profile-release-tag` 会生成对应表地址和包地址。
+`index-url=` 为空表示离线；`auto-update=0` 关闭自动更新。完整安装包内置同一管理表和全部独立游戏 ZIP，可离线首次应用。只更新适配包时，把独立 ZIP 手动放入 `switch/wine/profiles/`，文件名保持不变。`package-autorun.py --profile-repository` 与 `--profile-release-tag` 会生成对应表地址和包地址。
 
 v21-v23 的 `repository/tag` 设置会被读为对应 CNB 仓库的管理表地址，明确的空仓库继续表示离线。原 GitHub 默认管理表地址会自动迁移到当前 CNB 构建地址，用户填写的自定义地址会保留。旧在线绑定记录的是 owner/repo，新绑定记录完整表 URL：旧在线绑定需手动重新选择一次；自动检查不会静默迁移来源。旧离线绑定可继续匹配离线列表。
 
@@ -214,3 +216,7 @@ python3 wine-nx-probe/tests/check_local_ci.py
 主机测试需要 C 编译器、pkg-config、minizip、curl、OpenSSL、SDL2、SDL2_ttf、libpng。
 覆盖管理表解析、分游戏打包、来源隔离、按需下载、哈希与版本校验、配置合并、金手指保存、二进制封面恢复、提交中断恢复，以及手动选择和启动前更新流程。
 Switch 编译、主机测试与实际设备验收是不同层次；发布后还需确认真实 HTTPS 下载、网络不可用时继续启动、物理按键和存储恢复。
+
+### 原生手柄按键映射（API 14）
+
+A/B/X/Y 的 `.keys.txt` 映射可选 `0x200`、`0x201`、`0x202`、`0x203`，分别发送手柄 A/B/X/Y。启动器按键选择列表显示为“手柄 A/B/X/Y”。这些值直接映射 XInput，不生成键盘或鼠标事件；现有键盘、鼠标及未配置的手柄映射保留原行为。包含这些值的适配包须声明 `min_api: 14`。

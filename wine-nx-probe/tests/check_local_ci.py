@@ -199,6 +199,7 @@ with tempfile.TemporaryDirectory(prefix='autorun-ci-package-') as directory:
     shutil.copy2(ci.PROBE / 'source/autorun_update.h', probe / 'source/autorun_update.h')
     for name in ('key_names.h', 'launcher.c', 'launcher_ui.c', 'launcher_ui.h', 'launcher_zh_cn.h'):
         (probe / 'source' / name).write_text('fixture\n')
+    (probe / 'source/runtime.c').write_text('#define BUILD "nx-wow64-dynarec-1"\n')
     subprocess.run(['git', 'init', '-q', str(repo)], check=True)
     subprocess.run(['git', '-C', str(repo), '-c', 'user.name=CI fixture', '-c', 'user.email=ci@example.invalid',
                     'commit', '-q', '--allow-empty', '-m', 'fixture'], check=True)
@@ -247,7 +248,40 @@ with tempfile.TemporaryDirectory(prefix='autorun-ci-package-') as directory:
         assert output.read('switch/wine/profile-updates.txt') == b'index-url=https://cnb.cool/example/autorun/-/releases/download/profiles/autorun-profiles.tsv\nauto-update=1\nbuild-index-url=https://cnb.cool/example/autorun/-/releases/download/profiles/autorun-profiles.tsv\n'
         assert output.read('switch/wine/licenses/x86-test.txt') == b'fixture license'
         assert output.read('switch/wine/drive_c/dxvk/d3d9.dll') == image
-        assert not any(name.startswith('switch/wine/profiles/profile-') and name.endswith('.zip') for name in output.namelist())
+        assert result['features']['offline_profiles'] is True
+        expected_profiles = ci.verify_profiles(profiles)
+        bundled = {name for name in output.namelist() if name.startswith('switch/wine/profiles/') and name.endswith('.zip')}
+        assert bundled == {'switch/wine/profiles/' + entry['filename'] for entry in expected_profiles}
+        for entry in expected_profiles:
+            assert output.read('switch/wine/profiles/' + entry['filename']) == (release / entry['filename']).read_bytes()
+
+    # Even with a matching outer manifest, missing or stale bundled packages
+    # must fail the indexed inner-package verification.
+    with ZipFile(archive) as output:
+        packed = {name: output.read(name) for name in output.namelist()}
+    selected = 'switch/wine/profiles/' + expected_profiles[0]['filename']
+    for kind in ('missing', 'corrupt', 'extra'):
+        changed = dict(packed)
+        if kind == 'missing':
+            del changed[selected]
+        elif kind == 'corrupt':
+            changed[selected] += b'changed'
+        else:
+            changed['switch/wine/profiles/profile-stale-v1.zip'] = packed[selected]
+        metadata = json.loads(changed['switch/wine/build-manifest.json'])
+        metadata['files'] = {name[len('switch/wine/'):]: hashlib.sha256(data).hexdigest()
+                             for name, data in changed.items() if name != 'switch/wine/build-manifest.json'}
+        changed['switch/wine/build-manifest.json'] = json.dumps(metadata).encode()
+        invalid = repo / ('invalid-' + kind + '.zip')
+        with ZipFile(invalid, 'w') as output:
+            for name, data in changed.items():
+                output.writestr(name, data)
+        try:
+            ci.verify_runtime(invalid, profiles, commit)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('invalid offline package set accepted: ' + kind)
 
     subprocess.run([sys.executable, str(tools / 'package-autorun.py'), '--no-example-games',
                     '--amd64', str(amd64), '--x86-dxvk', str(x86)], check=True)
@@ -267,4 +301,4 @@ with tempfile.TemporaryDirectory(prefix='autorun-ci-package-') as directory:
                     '--amd64', str(amd64), '--x86-dxvk', str(x86), '--profile-repository', ''], check=True)
     ci.verify_runtime(archive, profiles, commit, ci.profile_index_url('', ''))
 
-print('PASS: real generic packager includes x86 graphics, licenses, profile channel and consistent manifests')
+print('PASS: real generic packager includes x86 graphics, licenses, all offline profiles, profile channel and consistent manifests')

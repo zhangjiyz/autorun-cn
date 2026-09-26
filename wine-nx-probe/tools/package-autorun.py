@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Build one SD-card archive with the x86 and AMD64 graphics runtimes."""
+"""Build one SD-card archive with the x86 and AMD64 graphics runtimes.
+
+The archive is autorun-NNN.zip, NNN the x86 runtime's build. --no-amd64 leaves
+the AMD64 half out, for a card that only runs 32-bit programs."""
 from pathlib import Path
 from pathlib import PurePosixPath
 from zipfile import ZipFile, ZIP_DEFLATED
@@ -21,6 +24,7 @@ default_repository = re.search(r'^#define AUTORUN_DEFAULT_REPOSITORY "([^"]+)"$'
 build = probe / 'build-switch-wow64-dynarec'
 stage_root = build / 'full-sd-card'
 stage = stage_root / 'switch/wine'
+marker = re.search(r'nx-wow64-dynarec-(\d+)', (probe / 'source/runtime.c').read_text()).group(1)
 default_amd64 = probe / 'build-switch-amd64/wine-nx-amd64-box64-mesa-dxvk-vkd3d.zip'
 parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
 parser.add_argument('--amd64', type=Path,
@@ -33,7 +37,10 @@ parser.add_argument('--x86-dxvk-overlay', type=Path,
                     help='Add the matching x86 DXVK overlay without replacing the AMD64 runtime')
 parser.add_argument('--x86-dxvk', type=Path,
                     help='Pinned x86 payload from build-dxvk.py --arch x86 (generic package only)')
+parser.add_argument('--no-amd64', action='store_true', help='leave the AMD64 runtime out')
 args = parser.parse_args()
+if args.no_amd64 and args.no_example_games:
+    parser.error('--no-example-games uses the CN AMD64 runtime and cannot be combined with --no-amd64')
 if (args.x86_dxvk_overlay or args.x86_dxvk) and not args.no_example_games:
     parser.error('x86 DXVK options require --no-example-games')
 if args.x86_dxvk_overlay and args.x86_dxvk:
@@ -100,9 +107,8 @@ if args.no_example_games:
     profile_dir = generic_stage / 'profiles'
     subprocess.run([sys.executable, str(tools / 'package-profiles.py'), '--output-dir', str(profile_dir),
                     '--repository', args.profile_repository or default_repository, '--release-tag', args.profile_release_tag], check=True)
-    # The main program carries the index only; game packages are separate Release assets.
-    for package in profile_dir.glob('profile-*.zip'):
-        package.unlink()
+    # Keep every indexed game package for first-time offline application.
+    # They remain separate Release assets for later per-game updates.
     (profile_dir / 'autorun-profiles.zip').unlink(missing_ok=True)
     component = r'[A-Za-z0-9_-][A-Za-z0-9_.-]{0,98}[A-Za-z0-9_-]|[A-Za-z0-9_-]'
     if args.profile_repository:
@@ -121,6 +127,7 @@ if args.no_example_games:
         '在 Autorun 中按 + 添加游戏并选择 EXE。\n'
         '启动 Switch 游戏时按住 R 打开自制程序菜单，进入 wine 文件夹，'
         '选择 Autorun（wine-nx-runtime.nro），以获得完整内存。\n'
+        'profiles 目录已内置全部离线适配 ZIP，可在游戏的适配包菜单选择并应用。\n'
         '本包不附带游戏；主程序在线更新使用 CNB PalmMuse/autorun-cn 的 autorun.zip。\n', encoding='utf-8')
     if args.x86_dxvk_overlay:
         with ZipFile(args.x86_dxvk_overlay) as overlay:
@@ -173,6 +180,7 @@ if args.no_example_games:
         },
     }
     manifest['features']['x86_dxvk'] = bool(args.x86_dxvk_overlay or args.x86_dxvk)
+    manifest['features']['offline_profiles'] = True
     if x86_dxvk_manifest:
         manifest['x86_dxvk'] = x86_dxvk_manifest
     if not manifest['features']['x86_dxvk']:
@@ -210,8 +218,10 @@ with ZipFile(overlay) as z:
         assert name.startswith('switch/wine/'), name
     z.extractall(stage_root)
 
-assert args.amd64.is_file(), f'{args.amd64} is missing; build the AMD64 DXVK/VKD3D package first'
-marker = merge_amd64(args.amd64, stage_root)
+if not args.no_amd64:
+    assert args.amd64.is_file(), f'{args.amd64} is missing; build the AMD64 DXVK/VKD3D package first, ' \
+                                 'or pass --no-amd64'
+    print(f'AMD64 runtime build {merge_amd64(args.amd64, stage_root)} merged')
 subprocess.run([sys.executable, str(tools / 'verify-wow64-package.py'), str(stage)], check=True)
 
 archive = build / f'autorun-{marker}.zip'

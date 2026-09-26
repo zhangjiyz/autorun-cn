@@ -619,6 +619,8 @@ add_executable(wine-nx-runtime
     source/game_cheats.c
     source/runtime_platform.c
     source/sd_cache.c
+    source/sd_cache_cn.c
+    source/sd_cache_upstream.c
     source/wow64_box64_bridge.c
     source/ntdll_pe_compat.c
     source/ws2_32_unix_stub.c
@@ -626,6 +628,7 @@ add_executable(wine-nx-runtime
     source/xinput_unix.c
     source/thread_profile.c
     source/compositor.c
+    source/osk.c
     source/compositor_gl.c
     source/compositor_egl.c
     source/forwarder.c
@@ -702,7 +705,7 @@ target_include_directories(wine-nx-runtime PRIVATE "${WINE_NX_PE_BUILD_DIR}/incl
 find_package(Git QUIET)
 # Keep the in-app version fallback aligned with the NACP metadata.
 set(AUTORUN_UPSTREAM_VERSION "0.0.1")
-set(AUTORUN_CN_REVISION "1")
+set(AUTORUN_CN_REVISION "2")
 set(AUTORUN_DISPLAY_VERSION "${AUTORUN_UPSTREAM_VERSION}.${AUTORUN_CN_REVISION}")
 set(AUTORUN_BUILD_TAG "")
 set(AUTORUN_BUILD_EPOCH 0)
@@ -918,7 +921,7 @@ endif()
 # functions come through eglGetProcAddress, so it works over either Mesa.
 find_library(SWITCH_SDL2 SDL2 HINTS "$ENV{DEVKITPRO}/portlibs/switch/lib")
 find_library(SWITCH_SDL2_TTF SDL2_ttf HINTS "$ENV{DEVKITPRO}/portlibs/switch/lib")
-set_source_files_properties(source/launcher.c source/launcher_catalog.c source/launcher_ui.c source/launcher_update.c source/launcher_profiles.c source/launcher_cheats.c source/steamgriddb.c source/dxvk_releases.c PROPERTIES
+set_source_files_properties(source/launcher.c source/launcher_catalog.c source/launcher_ui.c source/launcher_update.c source/launcher_profiles.c source/launcher_cheats.c source/steamgriddb.c source/dxvk_releases.c source/osk.c PROPERTIES
     INCLUDE_DIRECTORIES "$ENV{DEVKITPRO}/portlibs/switch/include/SDL2"
     COMPILE_DEFINITIONS _REENTRANT)
 set_property(SOURCE source/launcher.c source/launcher_update.c APPEND PROPERTY COMPILE_DEFINITIONS WINE_NX_BUILD_VERSION)

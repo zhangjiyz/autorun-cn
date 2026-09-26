@@ -269,6 +269,16 @@ if args.full_components:
             run([stripper, '--strip-debug', '-o', str(destination / name), str(path)])
         full_components[directory] = [name for name, target in targets]
         prebuilt.update((name, arch) for name, target in targets)
+# Upstream's component registration helper is included in a full CN package.
+# Runtime bootstrap defaults to upstream behavior and can be disabled in Settings.
+if args.full_components:
+    setup = stage / 'drive_c/windows/autorun-setup.exe'
+    run(['i686-w64-mingw32-clang', '-Os', '-Wall', '-Wextra', '-Werror',
+         '-fno-builtin', '-nostdlib', '-Wl,--entry,_start@0', '-Wl,--image-base,0x10000000',
+         '-Wl,--dynamicbase', '-o', str(setup), str(probe / 'tools/autorun_setup.c'),
+         '-lole32', '-ladvapi32', '-lkernel32', '-lntdll'])
+    if 'Arch: i386\n' not in inspect(setup, '--file-headers'):
+        raise ValueError('Wrong component setup architecture')
 common = 'ntdll kernel32 kernelbase msvcrt ucrtbase advapi32 sechost'.split()
 dxvk_paths = [args.dxvk / name for name in DXVK_DLLS] if args.dxvk else []
 vkd3d_paths = [args.vkd3d / name for name in VKD3D_DLLS] if args.vkd3d else []

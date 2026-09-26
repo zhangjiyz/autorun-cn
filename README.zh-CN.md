@@ -15,6 +15,16 @@ Autorun 是一款在 Switch 上运行 Windows 游戏和程序的自制软件。�
 
 ![Autorun 启动器](documentation/launcher.jpg)
 
+## 2026-09-26 上游整合
+
+本集成分支合入上游 `2ae1be6f`，保留 CN 适配包、输入和游戏专用修复。新功能及验证范围见[整合记录](docs/upstream-merge-20260926.md)。
+
+Windows 用户目录改为 `switch/wine/drive_c/users/steamuser`。与上游一致，旧 `users/wine` 数据不会自动迁移；使用旧目录存档的游戏升级后可能看不到原存档，需要将对应数据放到新用户目录。注册表沿用上游迁移逻辑：从运行环境根目录移至 `registry/`，不会覆盖新位置已有的 hive。
+
+**设置 → 系统**中的“浮动屏幕键盘”“文本框聚焦时自动打开键盘”“首次运行自动注册组件”“读取游戏目录 dxvk.conf”均按上游方式默认开启，保留各自的关闭开关。第一次使用本轮策略时，会备份已有设置并一次性开启这些功能，之后手动关闭的值会保留。游戏图形设置新增 FSR／整数缩放，与上游一致，默认关闭。
+
+SD 缓存默认采用 CN 策略，包括读缓存及按游戏启用的元数据／干净写句柄缓存。**设置 → 系统 → SD 缓存使用 CN 策略**默认开启；关闭后采用上游完整策略，包括路径元数据缓存和延迟写入。切换后完全退出并重新启动 Autorun 生效；已保存的开关值仍会保留。适配包的 CN 缓存参数只在 CN 策略开启时生效。
+
 ## 运行情况
 
 以下结果来自上游项目的真实 Switch 测试；当前汉化构建仍需实机复测：
@@ -52,7 +62,7 @@ Autorun 是一款在 Switch 上运行 Windows 游戏和程序的自制软件。�
 
 在游戏配置的“常规 → 适配包更新”中，首次按名称或关键词筛选并选择适配包；应用后记住绑定，后续只检查这个适配包的更新。应用前备份配置，更新时保留玩家后来修改的值，也可恢复上次配置。目前支持 SD 卡游戏。适配包可携带封面，应用后自动显示；单游戏“金手指”菜单支持总开关、逐项开关和数值保存，目前是框架，具体游戏效果尚未接入。
 
-维护者编辑 [适配映射表](wine-nx-probe/profiles/catalog.json)，通过 [适配包发布说明](wine-nx-probe/profiles/README.zh-CN.md) 生成 CNB Release 附件。Release 主程序使用 `PalmMuse/autorun-cn` 最新正式 Release 的 `autorun.zip`；Debug 主程序使用构建时指定的固定测试标签并允许预发布。适配功能使用一张 `autorun-profiles.tsv` 管理表和每游戏一个独立 ZIP，只下载选中的游戏包。主程序“设置 → 系统 → 适配包管理”可修改管理表地址、手动更新表，或开启启动前自动更新已绑定游戏。游戏本体需自行准备。
+维护者编辑 [适配映射表](wine-nx-probe/profiles/catalog.json)，通过 [适配包发布说明](wine-nx-probe/profiles/README.zh-CN.md) 生成 CNB Release 附件。Release 主程序使用 `PalmMuse/autorun-cn` 最新正式 Release 的 `autorun.zip`；Debug 主程序使用构建时指定的固定测试标签并允许预发布。适配功能使用一张 `autorun-profiles.tsv` 管理表和每游戏一个独立 ZIP，完整安装包将全部离线适配 ZIP 放在 `switch/wine/profiles/`；选中游戏时优先使用校验值匹配的内置包，缺少或版本变化时再下载。主程序“设置 → 系统 → 适配包管理”可修改管理表地址、手动更新表，或开启启动前自动更新已绑定游戏。游戏本体需自行准备。
 
 ## 添加游戏
 
@@ -72,7 +82,9 @@ Autorun 是一款在 Switch 上运行 Windows 游戏和程序的自制软件。�
 
 ### 需要 32 位转发器的游戏
 
-一些老游戏只能加载在固定的低地址内存区域，《极品飞车：地下狂飙 2》和 Halo 就是例子。Autorun 检测到此需求后会提示设置转发器：**设置 → 系统 → 制作 32 位转发器** 会在 HOME 菜单添加“Autorun 32 位”图标。请从这个图标启动这类游戏。
+未配置 `address-space` 时，默认使用 32 位地址空间；已有游戏和新加入的游戏都按此默认值处理。**设置 → 系统 → 制作 32 位转发器** 会在 HOME 菜单添加“Autorun 32 位”图标。需要低 4 GB 地址范围的游戏从该转发器启动。
+
+上游双向路由已启用：显式设置 `address-space=any`（游戏选项中的“任意”）时，从 32 位转发器启动会转交至已设置的 39 位 Autorun；未配置或显式设置“32 位”时使用 32 位。重置该选项恢复默认值，配置文件中仍省略此项。
 
 ## 使用启动器
 
@@ -82,7 +94,7 @@ Autorun 是一款在 Switch 上运行 Windows 游戏和程序的自制软件。�
 | **Y** | 打开游戏设置 |
 | **L / R** | 在主页（最近游玩）和游戏库之间切换 |
 | **−** | 在主页打开设置；在游戏库打开筛选和排序 |
-| **+** | 添加游戏，或退出 Autorun |
+| **+** | 添加游戏、临时运行一次程序，或退出 Autorun |
 
 各界面也支持触摸操作。
 
@@ -117,10 +129,11 @@ Autorun 是一款在 Switch 上运行 Windows 游戏和程序的自制软件。�
 
 ## 遇到问题时
 
-每次运行都会在 SD 卡的 `switch/wine` 中留下两份日志：
+每次运行的日志位于 SD 卡的 `switch/wine/logs`：
 
-- `wine-nx-runtime.log`：最近一次运行的日志。
-- `game-NAME.log`：该游戏最近一次运行的专用日志。
+- `autorun_runtime.log`：最近一次运行的日志。
+- `NAME.log`：该游戏最近一次运行的专用日志；启用诊断时增加 `_verbose`、`_profiler` 后缀。
+- `stdout.txt`、`stderr.txt`：程序标准输出和错误输出。
 
 反馈问题时，请附上游戏日志并描述看到的现象。在游戏设置中开启**详细日志**可获得更多信息，但会降低运行速度。
 
@@ -133,9 +146,9 @@ Autorun 是一款在 Switch 上运行 Windows 游戏和程序的自制软件。�
 
 ## 开发者资料
 
-本地一键检查和发布打包：`./local-ci.sh all` 生成 `autorun.zip`、一张 `autorun-profiles.tsv` 管理表和每游戏独立 ZIP；`./local-ci.sh profiles` 只生成管理表和游戏适配包。CI 校验管理表与每个包的版本、内容、哈希和长度，主程序只内置管理表。产物和校验文件保存在 `dist/local-ci/`，手动上传 CNB Release 时先上传 ZIP，最后上传管理表。环境、参数及发布说明见[本地 CI 文档](docs/local-ci.md)。
+本地一键检查和发布打包：`./local-ci.sh all` 生成 `autorun.zip`、一张 `autorun-profiles.tsv` 管理表和每游戏独立 ZIP；`./local-ci.sh profiles` 只生成管理表和游戏适配包。CI 校验管理表与每个包的版本、内容、哈希和长度，主程序内置同一管理表及全部离线适配 ZIP。产物和校验文件保存在 `dist/local-ci/`，手动上传 CNB Release 时先上传 ZIP，最后上传管理表。环境、参数及发布说明见[本地 CI 文档](docs/local-ci.md)。
 
-主程序 NACP 内部版本采用四段：前三段沿用上游，第四段是本分支的修订号。当前版本为 `0.0.1.1`，在 `wine-nx-probe/CMakeLists.txt` 中维护。
+主程序 NACP 内部版本采用四段：前三段沿用上游，第四段是本分支的修订号。当前版本为 `0.0.1.2`，在 `wine-nx-probe/CMakeLists.txt` 中维护。
 
 Autorun 的工作方式、构建流程、测试和文件布局见[技术文档](documentation/technical.md)。更新说明另见[中文文档](wine-nx-probe/UPDATING.zh-CN.md)。
 

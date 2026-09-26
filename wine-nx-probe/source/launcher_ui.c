@@ -1055,6 +1055,38 @@ static void repeat_held( struct ui *ui )
     push_button( ui, direction );
 }
 
+static int ui_input_held( const struct ui *ui )
+{
+    int count;
+    const Uint8 *keys = SDL_GetKeyboardState( &count );
+
+    for (int i = 0; i < count; i++) if (keys[i]) return 1;
+    if (SDL_GetMouseState( NULL, NULL ) & SDL_BUTTON_LMASK) return 1;
+    for (int i = 0; i < SDL_GetNumTouchDevices(); i++)
+        if (SDL_GetNumTouchFingers( SDL_GetTouchDevice( i ) )) return 1;
+    if (ui->controller && SDL_GameControllerGetAttached( ui->controller ))
+    {
+        for (int i = 0; i < SDL_CONTROLLER_BUTTON_MAX; i++)
+            if (SDL_GameControllerGetButton( ui->controller, i )) return 1;
+        if (abs( SDL_GameControllerGetAxis( ui->controller, SDL_CONTROLLER_AXIS_LEFTX ) ) >= STICK_RELEASE ||
+            abs( SDL_GameControllerGetAxis( ui->controller, SDL_CONTROLLER_AXIS_LEFTY ) ) >= STICK_RELEASE) return 1;
+    }
+    return 0;
+}
+
+void ui_resume_after_prompt( struct ui *ui )
+{
+    struct ui_input input;
+
+    ui->wait_input_release = 1;
+    ui->held = ui->stick_x = ui->stick_y = 0;
+    memset( &ui->touch, 0, sizeof(ui->touch) );
+    SDL_PumpEvents();
+    /* Consume both ui_wait's saved events and SDL's applet closing events.
+     * ui_poll still handles quit and device changes while input is blocked. */
+    while (ui_poll( ui, &input ));
+}
+
 int ui_begin_frame( struct ui *ui )
 {
     if (!ui->running || !platform_running()) return ui->running = 0;
@@ -1066,7 +1098,7 @@ int ui_begin_frame( struct ui *ui )
         ui->held = ui->stick_x = ui->stick_y = 0;
     }
     ui->scrolling_text = 0;
-    repeat_held( ui );
+    if (!ui->wait_input_release) repeat_held( ui );
     if (ui->screen) SDL_SetRenderTarget( ui->renderer, ui->screen );
     return 1;
 }
@@ -1160,6 +1192,11 @@ int ui_poll( struct ui *ui, struct ui_input *input )
 
         memset( input, 0, sizeof(*input) );
         input->button = UI_NONE;
+        if (ui->wait_input_release &&
+            (type == SDL_CONTROLLERBUTTONDOWN || type == SDL_CONTROLLERBUTTONUP ||
+             type == SDL_CONTROLLERAXISMOTION || type == SDL_KEYDOWN || type == SDL_KEYUP ||
+             type == SDL_FINGERDOWN || type == SDL_FINGERMOTION || type == SDL_FINGERUP ||
+             type == SDL_MOUSEBUTTONDOWN || type == SDL_MOUSEBUTTONUP || type == SDL_MOUSEMOTION)) continue;
         switch (event.type)
         {
         case SDL_QUIT:
@@ -1240,6 +1277,7 @@ int ui_poll( struct ui *ui, struct ui_input *input )
             }
         return 1;
     }
+    if (ui->wait_input_release && !ui_input_held( ui )) ui->wait_input_release = 0;
     return 0;
 }
 
@@ -1264,7 +1302,7 @@ static int needs_animation( struct ui *ui )
 
     ui->last_highlight = ui->highlight;
     return ui_animated( ui ) || (ui->animations && now - ui->fx_start < FADE_MS) || moving ||
-           ui->scrolling_text || now < ui->busy_until || ui->held || ui->touch.active ||
+           ui->scrolling_text || now < ui->busy_until || ui->held || ui->wait_input_release || ui->touch.active ||
            (ui->toast[0] && now < ui->toast_until + 50);
 }
 

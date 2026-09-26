@@ -1,4 +1,5 @@
 title=仙剑奇侠传三
+address-space=32-bit
 d3d=wine
 wined3d-explicit-buffer-flush=0
 pal3-black-overlay-skip=1

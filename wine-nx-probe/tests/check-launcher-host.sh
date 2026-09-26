@@ -58,11 +58,45 @@ clang -std=gnu11 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -fno-
 # sdl2-compat looks for SDL3 next to the program, not in Homebrew's lib folder.
 ln -s /opt/homebrew/lib/libSDL3.0.dylib "$build/libSDL3.dylib"
 
+# The floating keyboard: what its buttons and taps send, and its picture.
+clang -std=gnu11 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
+    -I "$probe/source" $(sdl2-config --cflags) -I/opt/homebrew/include \
+    "$probe/tests/osk.c" "$probe/source/osk.c" \
+    $(sdl2-config --libs) -L/opt/homebrew/lib -lSDL2_ttf -lpng -o "$build/osk"
+"$build/osk" "$font" "$shots"
+
 card="$build/card/sdmc:"
 mkdir -p "$card/switch/wine/drive_c/openttd" "$card/games/deep/er/still"
 ln -s "$drive_c/notepad.exe" "$drive_c/7zr.exe" "$card/switch/wine/drive_c/"
 ln -s "$drive_c/notepad.exe" "$card/switch/wine/drive_c/openttd/openttd.exe"
 ln -s "$drive_c/notepad.exe" "$card/games/deep/er/still/Deep.exe"
+
+# + -> Run a program once: the browser's pick starts at once and stays out of
+# the library.
+cat > "$build/once-script.txt" <<SCRIPT
+wait 10
+key plus
+wait 3
+key down
+wait 2
+key a
+wait 3
+key a
+wait 3
+key a
+wait 3
+key a
+wait 5
+SCRIPT
+( cd "$build/card" && SDL_VIDEODRIVER=dummy "$build/launcher_host" "$font" "$build/once-script.txt" \
+    > "$build/once-out.txt" 2>&1 ) || { cat "$build/once-out.txt"; exit 1; }
+grep -q "launcher returned 1 target 'sdmc:/switch/wine/drive_c/openttd/openttd.exe'" "$build/once-out.txt" || {
+    cat "$build/once-out.txt"; exit 1; }
+if [ -f "$card/switch/wine/launcher-library-v2.ini" ] && grep -q '^\[game ' "$card/switch/wine/launcher-library-v2.ini"; then
+    cat "$card/switch/wine/launcher-library-v2.ini"; exit 1
+fi
+rm -f "$card/switch/wine/launcher-library-v2.ini" "$card/switch/wine/target.txt"
+echo "launcher host run: + Run a program once starts it without adding it"
 
 # An empty explicit catalog must stay empty even though drive_c contains several
 # executables. Add OpenTTD through the browser, verify that adding did not launch
@@ -119,6 +153,85 @@ grep -q "launcher returned 1 target 'sdmc:/switch/wine/drive_c/openttd/openttd.e
     cat "$build/restart-out.txt"; exit 1;
 }
 echo "launcher host run: empty home, explicit add, persistence, details and start passed"
+
+# The same game from a 32-bit forwarder that can open others. It can be put
+# anywhere, so it goes to Autorun with 39 bits: straight there when the console
+# has that forwarder, and only after asking when it does not.
+LAUNCHER_HOST_TITLES=0500000000039000 SDL_VIDEODRIVER=dummy "$build/launcher_host" "$font" \
+    "$build/restart-script.txt" > "$build/handoff-out.txt" 2>&1 || { cat "$build/handoff-out.txt"; exit 1; }
+grep -q "^launch_title 0500000000039000$" "$build/handoff-out.txt" || { cat "$build/handoff-out.txt"; exit 1; }
+grep -q "launcher returned 0" "$build/handoff-out.txt" || { cat "$build/handoff-out.txt"; exit 1; }
+grep -qx "sdmc:/switch/wine/drive_c/openttd/openttd.exe" "sdmc:/switch/wine/run-next.txt"
+rm "sdmc:/switch/wine/run-next.txt"
+cat > "$build/handoff-ask-script.txt" <<SCRIPT
+wait 5
+key a
+wait 3
+shot $shots/handoff-first.png
+key a
+wait 5
+shot $shots/handoff-ask.png
+key b
+wait 3
+SCRIPT
+LAUNCHER_HOST_TITLES=none SDL_VIDEODRIVER=dummy "$build/launcher_host" "$font" \
+    "$build/handoff-ask-script.txt" > "$build/handoff-ask-out.txt" 2>&1 || { cat "$build/handoff-ask-out.txt"; exit 1; }
+if grep -q "^launch_title" "$build/handoff-ask-out.txt" || [ -e "sdmc:/switch/wine/run-next.txt" ]; then
+    cat "$build/handoff-ask-out.txt"; exit 1
+fi
+grep -q "launcher returned 0" "$build/handoff-ask-out.txt" || { cat "$build/handoff-ask-out.txt"; exit 1; }
+echo "launcher host run: a game that fits anywhere goes from a 32-bit forwarder to Autorun"
+
+# Removing a missing game must work even when profile recovery would fail.
+# Cover both the deleted directory and the deleted EXE, then restart to check
+# that neither Library nor Home resurrects the saved entry.
+cp "$card/switch/wine/launcher-library-v2.ini" "$build/missing-catalog.ini"
+cat > "$build/missing-remove-script.txt" <<SCRIPT
+wait 10
+key y
+wait 5
+key right
+key down
+key a
+wait 5
+key b
+SCRIPT
+cat > "$build/missing-restart-script.txt" <<SCRIPT
+wait 10
+SCRIPT
+for missing in directory executable; do
+    cp "$build/missing-catalog.ini" "$card/switch/wine/launcher-library-v2.ini"
+    if [ "$missing" = directory ]; then
+        mv "$card/switch/wine/drive_c/openttd" "$build/missing-game"
+    else
+        mv "$card/switch/wine/drive_c/openttd/openttd.exe" "$build/missing-exe"
+    fi
+    LAUNCHER_HOST_PROFILE_RECOVERY_FAIL=1 SDL_VIDEODRIVER=dummy "$build/launcher_host" "$font" \
+        "$build/missing-remove-script.txt" > "$build/missing-$missing-out.txt" 2>&1 || {
+        cat "$build/missing-$missing-out.txt"; exit 1;
+    }
+    if grep -q '^\[game ' "$card/switch/wine/launcher-library-v2.ini"; then
+        cat "$build/missing-$missing-out.txt" "$card/switch/wine/launcher-library-v2.ini"; exit 1
+    fi
+    if [ "$missing" = directory ]; then
+        test ! -e "$card/switch/wine/drive_c/openttd"
+    else
+        test ! -e "$card/switch/wine/drive_c/openttd/openttd.exe"
+    fi
+    SDL_VIDEODRIVER=dummy "$build/launcher_host" "$font" "$build/missing-restart-script.txt" \
+        > "$build/missing-$missing-restart-out.txt" 2>&1 || {
+        cat "$build/missing-$missing-restart-out.txt"; exit 1;
+    }
+    grep -q '0 catalog games (0 registered, 0 shown)' "$build/missing-$missing-restart-out.txt" || {
+        cat "$build/missing-$missing-restart-out.txt"; exit 1;
+    }
+    if [ "$missing" = directory ]; then
+        mv "$build/missing-game" "$card/switch/wine/drive_c/openttd"
+    else
+        mv "$build/missing-exe" "$card/switch/wine/drive_c/openttd/openttd.exe"
+    fi
+done
+echo "launcher host run: missing directory/EXE entries removed without profile recovery and stay removed after restart"
 
 # Eight played covers exercise Home's row: animated hit testing, swipe selection,
 # both ends, the header, Y Options, and the portrait library.

@@ -1,4 +1,5 @@
 title=新仙剑奇侠传Steam版
+address-space=32-bit
 d3d=dxvk
 own-controls=1
 controller=keyboard

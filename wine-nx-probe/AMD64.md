@@ -80,7 +80,7 @@ The smoke test checks imports, GS/TEB access, allocations above 4 GiB, SSE2,
 rounding-mode preservation across native calls, callbacks, TLS, and thread
 creation/join. Expected result: `RESULT PASS` in
 `pe64_smoke.log` and process exit code zero. Runtime diagnostics are in
-`wine-nx-runtime.log` and `horizon-trace.log`.
+`logs/autorun_runtime.log` and `logs/horizon-trace.log`.
 
 The full package also includes these native x64 programs in
 `C:\win64-tests`: functional, threads, lifecycle, messages, timers,

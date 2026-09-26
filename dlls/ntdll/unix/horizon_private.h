@@ -25,6 +25,8 @@ extern void wine_nx_thread_unregister( void ) __attribute__((weak));
 extern void wine_nx_thread_affinity_fixed( void ) __attribute__((weak));
 extern void horizon_get_memory_info( unsigned long long *total, unsigned long long *used );
 extern void horizon_get_address_space_limits( void **start, void **limit );
+extern unsigned long long horizon_next_thread_local_page( unsigned long long addr, unsigned long long limit );
+extern unsigned int horizon_drop_thread_local_pages( unsigned int *found );
 extern void *wine_nx_arm64ec_dispatch_ret;
 extern int horizon_get_kernel_regions( void **starts, size_t *sizes, int max );
 /* Logs the kernel's view of the low 4 GB once: megabytes per memory type and the largest free ranges. */

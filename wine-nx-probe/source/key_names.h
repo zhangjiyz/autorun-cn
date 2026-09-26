@@ -2,7 +2,8 @@
  * The controls a Switch has, and the keys they can be made to send.
  *
  * keys.txt is a NAME=code line for each control, where code is a Windows
- * virtual-key code or 0x100/0x101 for a mouse button. The Controls screen writes those lines, so it
+ * virtual-key code, 0x100/0x101 for a mouse button, or 0x200-0x203 for a
+ * native gamepad face button. The Controls screen writes those lines, so it
  * needs the same names the runtime reads and a readable name for each code to
  * put on the screen. A code with no name here is shown as its number, which is
  * what a hand-written file may hold.
@@ -97,6 +98,10 @@ static const struct wine_nx_key_name wine_nx_key_names[] =
     { 0x00, "Nothing" },
     { WINE_NX_MOUSE_LEFT, "Left mouse button" },
     { WINE_NX_MOUSE_RIGHT, "Right mouse button" },
+    { WINE_NX_GAMEPAD_A, "Gamepad A" },
+    { WINE_NX_GAMEPAD_B, "Gamepad B" },
+    { WINE_NX_GAMEPAD_X, "Gamepad X" },
+    { WINE_NX_GAMEPAD_Y, "Gamepad Y" },
     { 0x0d, "Enter" },       { 0x20, "Space" },        { 0x1b, "Escape" },
     { 0x09, "Tab" },         { 0x08, "Backspace" },
     { 0x10, "Shift" },       { 0x11, "Control" },      { 0x12, "Alt" },
@@ -128,6 +133,11 @@ static const struct wine_nx_key_name wine_nx_key_names[] =
 };
 
 #define WINE_NX_KEY_NAME_COUNT ((int)(sizeof(wine_nx_key_names) / sizeof(wine_nx_key_names[0])))
+
+static inline int wine_nx_control_key_allowed( int control, unsigned short code )
+{
+    return !wine_nx_gamepad_code( code ) || (control >= 0 && control < 4);
+}
 
 /* Where a code sits in the list, or -1 for one the list does not name. */
 static inline int wine_nx_key_index( unsigned short code )

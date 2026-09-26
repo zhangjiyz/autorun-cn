@@ -27,8 +27,12 @@ _Static_assert( NX_PAD_A == HidNpadButton_A && NX_PAD_B == HidNpadButton_B && NX
 u64 wine_nx_xinput_last_poll;
 /* Per-game opt-out: SDL may probe XInput even when its game uses keyboard input. */
 int wine_nx_force_keyboard;
+unsigned short wine_nx_xinput_face_key( unsigned int button );
 
 static pthread_mutex_t pad_mutex = PTHREAD_MUTEX_INITIALIZER;
+/* The floating keyboard (osk.c). */
+int wine_nx_osk_visible( void );
+
 static PadState pad;
 static int pad_ready;
 static XINPUT_GAMEPAD last_gamepad;
@@ -53,8 +57,15 @@ static NTSTATUS nx_xinput_get_state_unix( void *args )
     if (padIsConnected( &pad ))
     {
         HidAnalogStickState left = padGetStickPos( &pad, 0 ), right = padGetStickPos( &pad, 1 );
+        unsigned short face_keys[4];
+        unsigned int i;
+        u64 buttons = padGetButtons( &pad );
 
-        nx_xinput_map( padGetButtons( &pad ), left.x, left.y, right.x, right.y, &gamepad );
+        for (i = 0; i < 4; i++) face_keys[i] = wine_nx_xinput_face_key( i );
+        nx_xinput_map( buttons, left.x, left.y, right.x, right.y, &gamepad );
+        nx_xinput_remap_faces( buttons, face_keys, &gamepad );
+        /* The floating keyboard has the controller while it is up (osk.c). */
+        if (wine_nx_osk_visible()) memset( &gamepad, 0, sizeof(gamepad) );
         if (memcmp( &gamepad, &last_gamepad, sizeof(gamepad) ))
         {
             last_gamepad = gamepad;

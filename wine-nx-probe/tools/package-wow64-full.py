@@ -61,9 +61,10 @@ shutil.copy2(mesa_nro, stage / 'wine-nx-runtime.nro')
 # SPEED2.EXE, and the XtendedInput dinput8.dll in its folder (which loads the
 # real dinput8.dll from syswow64), and Most Wanted's speed.exe, which adds
 # d3dx9_26, with the scripts\NFS_XtendedInput.asi its ASI loader loads, which
-# adds msvcp140, which loads concrt140 when it starts. quartz delay-loads ddraw
-# too. Their imports, and the DLLs that exports they use forward to, come along.
-NFS_DLLS = 'ddraw dinput8 netapi32 shfolder tapi32 dbghelp vcruntime140 msvcp140 concrt140 xinput1_4 d3dx9_26'.split()
+# adds msvcp140, which loads concrt140 when it starts, and Carbon's NFSC.exe,
+# which adds d3dx9_30. quartz delay-loads ddraw too. Their imports, and the DLLs
+# that exports they use forward to, come along.
+NFS_DLLS = 'ddraw dinput dinput8 netapi32 shfolder tapi32 dbghelp vcruntime140 msvcp140 concrt140 xinput1_4 d3dx9_26 d3dx9_30'.split()
 # Fallout New Vegas (GOG) imports xinput1_3 and d3dx9_38, and its Galaxy.dll and
 # GalaxyWrp.dll import the 2012 runtimes. d3dx9 loads images through
 # windowscodecs, which it delay-imports, so no import walk reaches it.
@@ -85,7 +86,11 @@ SIMS2_DLLS = ['gdiplus']
 # 32-bit loader in syswow64. vulkan-1 loads winevulkan by hand and imports
 # nothing else of it, so no import walk reaches either: name both.
 VULKAN_DLLS = 'vulkan-1 winevulkan'.split()
-GAME_DLLS = NFS_DLLS + FALLOUT_DLLS + SOURCE_DLLS + HALO_DLLS + SIMS2_DLLS + VULKAN_DLLS
+# F.E.A.R. (Platinum Collection) imports d3dx9_27, from the April 2005 DirectX
+# redistributable its installer would have run. Without it FEAR.exe stops in
+# the loader with STATUS_DLL_NOT_FOUND. What d3dx9_27 imports is staged already.
+FEAR_DLLS = ['d3dx9_27']
+GAME_DLLS = NFS_DLLS + FALLOUT_DLLS + SOURCE_DLLS + HALO_DLLS + SIMS2_DLLS + VULKAN_DLLS + FEAR_DLLS
 pe = probe / 'build-wine-wow64-pe'
 toolchain = probe / 'toolchains/llvm-mingw-20260505-ucrt-macos-universal/bin'
 env = dict(os.environ, PATH=f'{toolchain}:/opt/homebrew/opt/bison/bin:' + os.environ['PATH'])
@@ -149,6 +154,16 @@ subprocess.run([str(toolchain / 'i686-w64-mingw32-clang'), '-O1', '-mwindows',
                 '-o', str(socket_test), str(probe / 'tests/win32/socket-test.c'), '-lws2_32'], check=True)
 assert 'Arch: i386\n' in readobj('--file-headers', socket_test)
 
+# What wineboot registers on a computer and nothing does on the Switch:
+# DirectShow, DirectX Media Objects and the MP3 decoder. The runtime runs it
+# before the first program on a card (source/runtime.c), for every game.
+autorun_setup = stage / 'drive_c/windows/autorun-setup.exe'
+subprocess.run([str(toolchain / 'i686-w64-mingw32-clang'), '-Os', '-Wall', '-Wextra', '-Werror',
+                '-fno-builtin', '-nostdlib', '-Wl,--entry,_start@0', '-Wl,--image-base,0x10000000',
+                '-Wl,--dynamicbase', '-o', str(autorun_setup), str(tools / 'autorun_setup.c'),
+                '-lole32', '-ladvapi32', '-lkernel32', '-lntdll'], check=True)
+assert 'Arch: i386\n' in readobj('--file-headers', autorun_setup)
+
 # The Sims 2 Ultimate Collection is shipped installed; what is left is telling
 # the game where each of its packs is, which its release does with a batch file
 # of reg add lines whose every path comes from the folder it is run in.
@@ -159,17 +174,37 @@ subprocess.run([str(toolchain / 'i686-w64-mingw32-clang'), '-Os', '-Wall', '-Wex
                 '-Wl,--dynamicbase', '-o', str(sims2 / 'sims2-setup.exe'),
                 str(tools / 'sims2_setup.c'), '-ladvapi32', '-lkernel32', '-lntdll'], check=True)
 assert 'Arch: i386\n' in readobj('--file-headers', sims2 / 'sims2-setup.exe')
+# DXVK's settings for the game, which the setup copies beside each executable.
+shutil.copy2(tools / 'sims2/dxvk.conf', sims2 / 'dxvk.conf')
 (sims2 / 'README.txt').write_text('''The Sims 2 Ultimate Collection
 ==============================
 
-Copy the release's Base, EP1-EP9 and SP1-SP8 folders into C:\\The Sims 2 on the
-card -- leave __Installer and Support behind, they are for a computer -- and run
-sims2-setup.exe once from the launcher. It writes what the release's own
-"Instalar Registros" batch file writes, with the card's paths, and says what it
-did in wine-nx-runtime.log as [SIMS2 SETUP] lines. Running it again is harmless.
+Copy the collection onto the card -- leave __Installer and Support behind, they
+are for a computer -- and run sims2-setup.exe once from the launcher. It writes
+what the release's own "Instalar Registros" batch file writes, with the card's
+paths, and says what it did in autorun_runtime.log as [SIMS2 SETUP] lines.
+Running it again is harmless.
 
-The game is then C:\\The Sims 2\\EP9\\TSBin\\Sims2EP9.exe, which is the one
-executable the collection has; it relocates, so it needs no forwarder.
+Where the packs go does not matter much. Each one is recognised by the
+executable in its TSBin, not by the name of the folder around it, so a release
+that calls them Base and EP1-EP9 and one that spells out "The Sims 2 Nightlife"
+both work, and the collection may keep a folder of its own around them. Put
+sims2-setup.exe's folder beside the packs, or beside the folder holding them.
+
+The setup also copies dxvk.conf from its folder into each pack's TSBin, next to
+the executable. It holds the game to 512 MB of video memory: DXVK's own profile
+for The Sims 2 reports 2 GB, and on the Switch the game fills the shared 1.5 GB
+and crashes. A dxvk.conf already in TSBin is left as it is.
+
+It also sets the game's own Graphics Rules.sgr (TSData\\Res\\Config in each pack)
+for the Switch's 1280x720 screen: in its screen resolution option every default
+becomes 1280x720, and a maximum below that is raised to it. Nothing else in the
+file changes, and the file as it was is kept as Graphics Rules.sgr.original.
+
+The game is the newest expansion's executable, TSBin\\Sims2EP9.exe. It has no
+relocations and is linked for 0x400000, so it needs a 32-bit forwarder, and
+even then it only starts when nothing else has taken that address: a run that
+says "[IMAGE] this program cannot be moved" wants trying again.
 
 The game's own movies -- the intro, the EA logo, what plays on a television --
 are .movie files in Maxis' own format, which the game reads itself: they need no
@@ -210,7 +245,7 @@ sims2-setup.exe before running it:
 # The card gets the file the launcher would have written, naming the Switch's
 # adapter the way DXVK reports it, at 720p. The game rewrites this file itself
 # once its own options are used, so the values are a starting point, not a rule.
-fallout = stage / 'drive_c/users/wine/Documents/My Games/FalloutNV'
+fallout = stage / 'drive_c/users/steamuser/Documents/My Games/FalloutNV'
 fallout.mkdir(parents=True, exist_ok=True)
 (fallout / 'FalloutPrefs.ini').write_bytes('\r\n'.join((
     '[Display]',
@@ -312,6 +347,9 @@ NFSU2's dinput8.dll and Most Wanted's NFS_XtendedInput.asi. Neither executable
 can be moved in memory, so start them through a forwarder set to a 32-bit
 address space.
 
+F.E.A.R. (Platinum Collection): d3dx9_27, which FEAR.exe imports and the game's
+DirectX installer would otherwise supply.
+
 Fallout New Vegas (GOG): xinput1_3, d3dx9_38 and the windowscodecs that loads its
 textures are staged, with msvcp110 and msvcr110 for Galaxy.dll and GalaxyWrp.dll.
 Its executable relocates, so it needs no forwarder. Started with no settings of
@@ -319,7 +357,7 @@ its own the game hands itself to FalloutNVLauncher.exe and closes, because the
 display it is told to use is not one it recognises, so the payload brings the
 settings file it would have written:
 
-    C:\\users\\wine\\Documents\\My Games\\FalloutNV\\FalloutPrefs.ini
+    C:\\users\\steamuser\\Documents\\My Games\\FalloutNV\\FalloutPrefs.ini
 
 It names the Switch's GPU as DXVK reports it, at 1280x720. The game rewrites
 that file once its own options are used; if it already holds settings worth
@@ -389,7 +427,7 @@ no-balance.txt and the rest -- and the first run moves each into settings.json
 and takes the file away, saying so in the log. A setting a newer build added is
 kept when an older one writes the file back.
 
-wine-nx-runtime.log holds the run. Its [PROGRESS] lines report OpenGL frames,
+autorun_runtime.log holds the run. Its [PROGRESS] lines report OpenGL frames,
 the time in eglSwapBuffers and in opengl32 calls, the megabytes Wine copies for
 32-bit buffer mappings (copy_mb), whether the GPU maps the program's own pages
 (pinned=1, or -1 with pin_rc when nvservices refused them), and the slowest

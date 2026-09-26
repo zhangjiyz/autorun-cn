@@ -11,6 +11,7 @@
 在 `Game.exe` 旁边的 `Game.wine-nx.txt` 中设置：
 
 ```text
+address-space=32-bit
 own-controls=1
 aspect-fit=800x600
 touch-coordinates=screen
@@ -19,6 +20,8 @@ left-stick-eight-way=1
 left-stick-aim=140
 left-stick-move=mouse
 ```
+
+`address-space=32-bit` 固定通过 32 位地址空间运行。此 EXE 可以重定位，上游自动路由会允许它使用 39 位地址空间，但下雪时的 OpenGL 缓冲映射会触发大量 WoW64 内存复制。此前 32 位运行日志中的 `copy_mb=0`；固定此项用于恢复该运行条件，下雪场景的帧率仍需实机验证。需要已安装 Autorun 32-bit 转发器；仅修改配置无需重编译游戏 DLL。
 
 `aspect-fit` 将完整的 4:3 游戏画面居中；`touch-coordinates=screen` 让触屏坐标按 Switch 的 1280×720 桌面传给这款游戏。只有完成上述可执行文件补丁后，游戏自己的光标才会读取该位置。游戏的键盘方向键在实机上只让角色朝四个方向移动，因此 `left-stick-move=mouse` 让默认摇杆移动改用游戏自己的鼠标路径：按摇杆实际角度沿圆周连续定位光标并按住左键，不再吸附到八个固定点。
 

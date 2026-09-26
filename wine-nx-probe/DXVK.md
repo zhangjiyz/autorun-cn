@@ -139,7 +139,7 @@ or a fake GPU. For an optional overlay, add `dxvk.hud = fps,frametimes` to a
 `dxvk.conf` beside the game. No performance or memory-saving claims are made
 until measured on the Switch.
 
-After a failure, retain `wine-nx-runtime.log`, `stdout.txt`, `stderr.txt`,
+After a failure, retain `logs/autorun_runtime.log`, `logs/stdout.txt`, `logs/stderr.txt`,
 `target.txt`, the game's `*.wine-nx.txt`, and DXVK's `DarkSoulsII_d3d11.log` /
 `DarkSoulsII_dxgi.log` from the game's directory if present. DXVK also sends
 messages through Wine's debug output. The runtime should print

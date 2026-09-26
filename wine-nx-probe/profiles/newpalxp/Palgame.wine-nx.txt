@@ -1,4 +1,5 @@
 title=新仙剑奇侠传XP版
+address-space=32-bit
 d3d=wine
 wined3d-frontbuffer-swap=1
 own-controls=1

@@ -2210,6 +2210,21 @@ struct horizon_accept_hardware_message_request
     unsigned int hw_id;
 };
 
+struct horizon_get_key_state_request
+{
+    struct horizon_server_request_header header;
+    int async;
+    int key;
+    char pad[4];
+};
+
+struct horizon_get_key_state_reply
+{
+    struct horizon_server_reply_header header;
+    unsigned char state;
+    char pad[7];
+};
+
 struct horizon_hardware_msg_data
 {
     unsigned long long info;
@@ -2889,6 +2904,8 @@ struct horizon_server_object
     unsigned long long file_completion_key;
     unsigned int file_completion_flags;  /* FILE_SKIP_* */
     struct horizon_memfile *mapping_memfile; /* mapping: a section with no file, kept by file_fd */
+    struct horizon_server_object *mapping_shared; /* image mapping: file object backing its writable
+                                                   * shared sections, as wineserver's shared_map */
 };
 
 struct horizon_server_handle_entry
@@ -4112,6 +4129,8 @@ static void horizon_server_free_object( struct horizon_server_object *object )
     if (object->wait_port && !--object->wait_port->refs) horizon_server_free_object( object->wait_port );
     if (object->file_completion && !--object->file_completion->refs)
         horizon_server_free_object( object->file_completion );
+    if (object->mapping_shared && !--object->mapping_shared->refs)
+        horizon_server_free_object( object->mapping_shared );
     if (object->reg_key) horizon_reg_release( &horizon_registry, object->reg_key );
     if (object->file_fd != -1) close( object->file_fd );
     free( object->file_name );
@@ -7517,6 +7536,40 @@ static unsigned int horizon_server_queue_raw_mouse_locked( struct horizon_user_w
     return HORIZON_STATUS_SUCCESS;
 }
 
+/* Whether a key message is still waiting for the program to take it. The
+ * thread's key state then follows those messages, and is not brought up to
+ * the desktop's: server/queue.c locks it while hardware messages are being
+ * processed. */
+static int horizon_server_key_messages_pending_locked( void )
+{
+    struct horizon_input_message *queued;
+
+    for (queued = horizon_input_messages; queued; queued = queued->next)
+        if (queued->device == HORIZON_IMDT_KEYBOARD && !queued->raw_keyboard &&
+            queued->msg >= HORIZON_KBD_WM_KEYDOWN && queued->msg <= HORIZON_KBD_WM_SYSKEYUP)
+            return 1;
+    return 0;
+}
+
+/* server/queue.c: sync_input_keystate. The thread's state takes the keys
+ * that changed on the desktop since it last did, keeping what the thread set
+ * for itself (SetKeyboardState) for the others. */
+static unsigned char horizon_input_desktop_keystate[256];
+
+static void horizon_server_sync_keystate_locked( struct horizon_input_shm *input,
+                                                 const struct horizon_desktop_shm *desktop )
+{
+    unsigned int i;
+
+    if (horizon_server_key_messages_pending_locked()) return;
+    for (i = 0; i < 256; i++)
+    {
+        if (horizon_input_desktop_keystate[i] == desktop->keystate[i]) continue;
+        input->keystate[i] = horizon_input_desktop_keystate[i] = desktop->keystate[i];
+    }
+    input->keystate_serial = desktop->keystate_serial;
+}
+
 static void horizon_server_remove_input_message_locked( struct horizon_input_message *message )
 {
     struct horizon_input_message **ptr;
@@ -7616,10 +7669,14 @@ static int horizon_server_handle_send_keyboard( struct horizon_server_connection
             status = horizon_server_queue_key_locked( focus, event.message, event.vkey, event.lparam,
                                                       desktop->cursor.x, desktop->cursor.y, time, kbd->info,
                                                       event.data_flags, NULL );
+        /* The desktop's state is the asynchronous one and changes now; the
+         * thread's changes as the program takes each key message
+         * (accept_hardware_message), as server/queue.c keeps it: Shift sent
+         * down, A down and up and Shift up together must still find Shift
+         * down when TranslateMessage makes a character of the A. */
         horizon_keyboard_update_state( desktop->keystate, event.message, event.vkey, 0xc0 );
-        horizon_keyboard_update_state( input->keystate, event.message, event.vkey, 0x80 );
-        input->keystate_serial++;
         desktop->keystate_serial++;
+        horizon_server_sync_keystate_locked( input, desktop );
 
         if (raw_target)
         {
@@ -7857,6 +7914,27 @@ static int horizon_server_handle_accept_hardware_message( struct horizon_server_
         struct horizon_input_message *queued = *ptr;
 
         if (queued->id != request->hw_id) continue;
+        /* The thread's key state follows the key messages it has taken
+         * (server/queue.c: release_hardware_message). */
+        if (queued->device == HORIZON_IMDT_KEYBOARD && !queued->raw_keyboard &&
+            queued->msg >= HORIZON_KBD_WM_KEYDOWN && queued->msg <= HORIZON_KBD_WM_SYSKEYUP)
+        {
+            struct horizon_input_shm *input = horizon_server_input_shared_locked();
+            struct horizon_obj_locator desktop_locator;
+            struct horizon_desktop_shm *desktop = horizon_server_desktop_shared_locked( &desktop_locator );
+
+            *ptr = queued->next;
+            if (horizon_input_messages_tail == &queued->next) horizon_input_messages_tail = ptr;
+            if (input)
+            {
+                horizon_keyboard_update_state( input->keystate, queued->msg, (unsigned int)queued->wparam, 0x80 );
+                input->keystate_serial++;
+                if (desktop) horizon_server_sync_keystate_locked( input, desktop );
+                horizon_server_flush_input_locked();
+            }
+            free( queued );
+            break;
+        }
         *ptr = queued->next;
         if (horizon_input_messages_tail == &queued->next) horizon_input_messages_tail = ptr;
         free( queued );
@@ -7865,6 +7943,42 @@ static int horizon_server_handle_accept_hardware_message( struct horizon_server_
     horizon_server_refresh_queues_locked();
     pthread_mutex_unlock( &horizon_server_objects_mutex );
     return horizon_server_write_status( connection->reply_fd, HORIZON_STATUS_SUCCESS );
+}
+
+/* server/queue.c: get_key_state. GetAsyncKeyState reads the desktop's state
+ * and clears its pressed-since bit; GetKeyState the thread's, brought up to
+ * the desktop's unless key messages are still to be taken. */
+static int horizon_server_handle_get_key_state( struct horizon_server_connection *connection,
+                                                const unsigned char *message )
+{
+    const struct horizon_get_key_state_request *request = (const void *)message;
+    struct horizon_get_key_state_reply reply;
+    struct horizon_obj_locator desktop_locator;
+    struct horizon_desktop_shm *desktop;
+    struct horizon_input_shm *input;
+
+    memset( &reply, 0, sizeof(reply) );
+    pthread_mutex_lock( &horizon_server_objects_mutex );
+    if (!(input = horizon_server_input_shared_locked()) ||
+        !(desktop = horizon_server_desktop_shared_locked( &desktop_locator )))
+        reply.header.error = HORIZON_STATUS_INVALID_HANDLE;
+    else if (request->async)
+    {
+        reply.state = desktop->keystate[request->key & 0xff];
+        desktop->keystate[request->key & 0xff] &= ~0x40;
+        desktop->keystate_serial++;
+        horizon_server_flush_session_range_locked(
+            desktop_locator.offset,
+            offsetof( struct horizon_shared_object, shm ) + sizeof(struct horizon_desktop_shm) );
+    }
+    else
+    {
+        horizon_server_sync_keystate_locked( input, desktop );
+        reply.state = input->keystate[request->key & 0xff];
+        horizon_server_flush_input_locked();
+    }
+    pthread_mutex_unlock( &horizon_server_objects_mutex );
+    return horizon_server_write_reply( connection->reply_fd, &reply, sizeof(reply), NULL, 0 );
 }
 
 static int horizon_server_handle_get_thread_input( struct horizon_server_connection *connection )
@@ -11817,7 +11931,7 @@ void horizon_trace( const char *fmt, ... )
     /* Each verbose line reopens the separate trace file on the SD card. */
     if (!&wine_nx_runtime_verbose || !wine_nx_runtime_verbose) return;
     pthread_mutex_lock( &lock );
-    if ((f = fopen( "sdmc:/switch/wine/horizon-trace.log", "a" )))
+    if ((f = fopen( "sdmc:/switch/wine/logs/horizon-trace.log", "a" )))
     {
         __builtin_va_start( args, fmt );
         vfprintf( f, fmt, args );
@@ -11997,6 +12111,25 @@ BOOL horizon_get_stack_region( void **start, void **limit )
     return TRUE;
 }
 
+/* The next page at or after addr, below limit, that the kernel holds threads'
+ * local storage in, or 0. The kernel places those pages itself, at random in
+ * the code region, whenever a new thread finds no free slot in the ones it
+ * has; libnx's reservations mean nothing to it. */
+unsigned long long horizon_next_thread_local_page( unsigned long long addr, unsigned long long limit )
+{
+    MemoryInfo info;
+    u32 page_info;
+
+    while (addr < limit)
+    {
+        if (R_FAILED( svcQueryMemory( &info, &page_info, addr ) )) return 0;
+        if (info.type == MemType_ThreadLocal) return info.addr > addr ? info.addr : addr;
+        if (info.addr + info.size <= addr) return 0;  /* the last block wraps */
+        addr = info.addr + info.size;
+    }
+    return 0;
+}
+
 void horizon_get_address_space_limits( void **start, void **limit )
 {
     u64 base = 0, size = 0;
@@ -12021,6 +12154,123 @@ void horizon_get_address_space_limits( void **start, void **limit )
 }
 #endif
 
+/* As wineserver's build_shared_mapping (server/mapping.c): the writable shared
+ * sections of an image are backed by one file that every view of the image
+ * shares, each section taking the next multiple of its mapped size, filled
+ * from the image file. map_image_into_view maps that file over the sections;
+ * without it an image with such a section - FEAR.exe's .SHARED - fails there
+ * with STATUS_INVALID_IMAGE_FORMAT. The file is a memfile, the only kind
+ * horizon_mmap maps shared.
+ * Returns the memfile descriptor, -2 when the image has no such section, or
+ * -1 with errno set. */
+static int horizon_server_build_shared_mapping( int fd, unsigned int alignment )
+{
+    static const unsigned int sector_align = 0x1ff;
+    const unsigned long long align_mask = alignment - 1 > 0xfff ? alignment - 1 : 0xfff;
+    unsigned char dos[64], nt[24];
+    unsigned char *headers = NULL, *sec, *buffer = NULL;
+    unsigned int pe_offset, opt_size, section_count, headers_size, i;
+    unsigned long long total = 0, max_file = 0, shared_pos = 0;
+    struct horizon_memfile *memfile = NULL;
+    int shared_fd = -1, pass;
+
+    if (horizon_server_read_exact_at( fd, 0, dos, sizeof(dos) )) return -2;
+    pe_offset = horizon_get_le32( dos + 0x3c );
+    if (horizon_server_read_exact_at( fd, pe_offset, nt, sizeof(nt) )) return -2;
+    section_count = horizon_get_le16( nt + 6 );
+    opt_size = horizon_get_le16( nt + 20 );
+    headers_size = opt_size + section_count * 40;
+    /* horizon_server_read_pe_image_info has already vetted these headers */
+    if (!(headers = malloc( headers_size )))
+    {
+        errno = ENOMEM;
+        return -1;
+    }
+    if (horizon_server_read_exact_at( fd, pe_offset + sizeof(nt), headers, headers_size ))
+    {
+        free( headers );
+        return -2;
+    }
+
+    /* The first pass sizes the file, the second fills it. */
+    for (pass = 0; pass < 2; pass++)
+    {
+        for (i = 0, sec = headers + opt_size; i < section_count; i++, sec += 40)
+        {
+            unsigned int virtual_size = horizon_get_le32( sec + 8 );
+            unsigned int raw_size = horizon_get_le32( sec + 16 );
+            unsigned int raw_ptr = horizon_get_le32( sec + 20 );
+            unsigned int charact = horizon_get_le32( sec + 36 );
+            unsigned long long map_size, file_size, write_pos, done;
+            off_t read_pos;
+
+            if (!(charact & 0x10000000 /* IMAGE_SCN_MEM_SHARED */) ||
+                !(charact & 0x80000000 /* IMAGE_SCN_MEM_WRITE */))
+                continue;
+
+            /* get_section_sizes in server/mapping.c */
+            map_size = ((virtual_size ? virtual_size : raw_size) + align_mask) & ~align_mask;
+            read_pos = raw_ptr & ~sector_align;
+            file_size = (raw_size + (raw_ptr & sector_align) + sector_align) & ~sector_align;
+            if (file_size > map_size) file_size = map_size;
+
+            if (!pass)
+            {
+                total += map_size;
+                if (file_size > max_file) max_file = file_size;
+                continue;
+            }
+
+            write_pos = shared_pos;
+            shared_pos += map_size;
+            if (!raw_ptr || !file_size) continue;
+
+            for (done = 0; done < file_size;)
+            {
+                ssize_t ret = pread( fd, buffer + done, file_size - done, read_pos + done );
+
+                /* a partial sector at the end of the file is not an error */
+                if (!ret && file_size - done < 0x200) break;
+                if (ret <= 0) goto failed;
+                done += ret;
+            }
+            if (horizon_memfile_pwrite( memfile, (const char *)buffer, done, write_pos ) != (ssize_t)done)
+                goto failed;
+        }
+
+        if (pass) break;
+        if (!total)
+        {
+            free( headers );
+            return -2;
+        }
+        if ((shared_fd = horizon_memfile_create( total, 0 )) == -1) goto failed;
+        if (!(memfile = horizon_memfile_from_fd( shared_fd )) || !(buffer = malloc( max_file ? max_file : 1 )))
+        {
+            errno = ENOMEM;
+            goto failed;
+        }
+    }
+
+    free( buffer );
+    free( headers );
+#ifdef __SWITCH__
+    horizon_trace( "[HZ] shared sections: %llu bytes in a memfile", total );
+#endif
+    return shared_fd;
+
+failed:
+    {
+        int error = errno ? errno : EIO;
+
+        if (shared_fd != -1) close( shared_fd );
+        free( buffer );
+        free( headers );
+        errno = error;
+        return -1;
+    }
+}
+
 static int horizon_server_handle_create_mapping( struct horizon_server_connection *connection,
                                                  const unsigned char *message,
                                                  const unsigned char *data, unsigned int data_size )
@@ -12035,7 +12285,7 @@ static int horizon_server_handle_create_mapping( struct horizon_server_connectio
     unsigned int mapping_flags = request->flags;
     unsigned int file_access = request->file_access;
     char *mapping_name = NULL;
-    int fd = -1;
+    int fd = -1, shared_fd = -1;
 #ifdef __SWITCH__
     int dbg_has_image = -1;
 #endif
@@ -12098,6 +12348,10 @@ static int horizon_server_handle_create_mapping( struct horizon_server_connectio
         else mapping_size = st.st_size;
     }
 
+    if (!reply.header.error && (request->flags & HORIZON_SEC_IMAGE) &&
+        (shared_fd = horizon_server_build_shared_mapping( fd, image_info.alignment )) == -1)
+        reply.header.error = horizon_server_errno_status( errno );
+
     if (!reply.header.error)
     {
         unsigned int status = HORIZON_STATUS_SUCCESS;
@@ -12122,6 +12376,23 @@ static int horizon_server_handle_create_mapping( struct horizon_server_connectio
             mapping_entry->object->mapping_has_image = !!(request->flags & HORIZON_SEC_IMAGE);
             mapping_entry->object->mapping_image = image_info;
             mapping_entry->object->mapping_memfile = horizon_memfile_from_fd( fd );
+            if (shared_fd >= 0)
+            {
+                struct horizon_server_handle_entry *shared_entry =
+                    horizon_server_create_handle_locked( HORIZON_SERVER_OBJECT_FILE );
+
+                if (shared_entry)
+                {
+                    /* No handle of its own: the mapping holds its one reference,
+                     * and get_mapping_info hands each caller a handle to it. */
+                    horizon_server_unlink_handle_locked( shared_entry );
+                    shared_entry->object->file_fd = shared_fd;
+                    shared_entry->object->file_access = FILE_READ_DATA | FILE_WRITE_DATA;
+                    mapping_entry->object->mapping_shared = shared_entry->object;
+                    free( shared_entry );
+                    shared_fd = -1;
+                }
+            }
             reply.handle = mapping_entry->handle;
 #ifdef __SWITCH__
             dbg_has_image = mapping_entry->object->mapping_has_image;
@@ -12141,6 +12412,7 @@ static int horizon_server_handle_create_mapping( struct horizon_server_connectio
 #endif
 
     if (fd != -1) close( fd );
+    if (shared_fd >= 0) close( shared_fd );
     free( mapping_name );
     return horizon_server_write_reply( connection->reply_fd, &reply, sizeof(reply), NULL, 0 );
 }
@@ -12173,6 +12445,14 @@ static int horizon_server_handle_get_mapping_info( struct horizon_server_connect
         reply.size = entry->object->mapping_size;
         reply.flags = entry->object->mapping_flags;
         reply.shared_file = 0;
+        if (entry->object->mapping_shared)
+        {
+            struct horizon_server_handle_entry *shared =
+                horizon_server_create_handle_for_object_locked( entry->object->mapping_shared );
+
+            /* the client closes it once the view is mapped (virtual.c) */
+            if (shared) reply.shared_file = shared->handle;
+        }
 #ifdef __SWITCH__
         dbg_found = 1;
         dbg_type = entry->object->type;
@@ -13942,6 +14222,9 @@ static void *horizon_server_thread( void *param )
         case HORIZON_REQ_SET_CURSOR:
             status = horizon_server_handle_set_cursor( connection, message );
             break;
+        case HORIZON_REQ_GET_KEY_STATE:
+            status = horizon_server_handle_get_key_state( connection, message );
+            break;
         default:
             WARN( "unimplemented Horizon server request %d size %u reply_size %u.\n",
                   header->req, header->request_size, header->reply_size );
@@ -15263,6 +15546,11 @@ static void section_failure( const char *what, void *addr, void *source, size_t 
 extern void *horizon_native_window_start, *horizon_native_window_end;
 static int horizon_query_region( void *context, unsigned long long addr, struct horizon_region *region );
 
+#include "horizon_code_memory.h"
+
+/* Everything a 32-bit program can address. */
+#define WINE_NX_GUEST_LIMIT 0x100000000ull
+
 #define HORIZON_ANCHOR_REGION ((size_t)32 * 1024 * 1024)
 #define HORIZON_ANCHOR_REGIONS 32
 
@@ -15308,17 +15596,36 @@ static void *find_anchor_run_locked( size_t size )
  * search picks at random and asks 512 times, and each ask walks every
  * reservation the process holds: with regions full, that search was 59% of
  * Most Wanted's main thread and its frame rate halved. */
-static void *find_anchor_region_locked( size_t size )
+/* An anchor region is this runtime's before anything is in it: anchors are
+ * packed into it by find_anchor_run_locked, which looks only at the mapping
+ * tree. Its free space reads as free to the kernel and to the tree alike, and
+ * build 227 put a code arena there -- after which every section anchor in the
+ * region failed with EEXIST, and The Sims 2 wrote through the NULL view it was
+ * handed. */
+static char *anchor_region_end_overlapping( const char *start, size_t size )
 {
-    char *candidate = horizon_native_window_start;
-    char *end = horizon_native_window_end;
+    unsigned int i;
+
+    for (i = 0; i < anchor_region_count; i++)
+        if (start < anchor_regions[i].end && anchor_regions[i].start < start + size) return anchor_regions[i].end;
+    return NULL;
+}
+
+static void *find_free_run_locked( char *candidate, char *end, size_t size )
+{
     struct horizon_region region;
 
     if (!candidate || !end) return NULL;
     while (size <= (size_t)(end - candidate))
     {
         struct horizon_mapping *overlap = find_overlap_mapping( candidate, size );
+        char *region_end;
 
+        if ((region_end = anchor_region_end_overlapping( candidate, size )))
+        {
+            candidate = region_end;
+            continue;
+        }
         if (overlap)
         {
             candidate = (char *)overlap->addr + overlap->size;
@@ -15334,6 +15641,11 @@ static void *find_anchor_region_locked( size_t size )
         candidate = (char *)(uintptr_t)(region.addr + region.size);
     }
     return NULL;
+}
+
+static void *find_anchor_region_locked( size_t size )
+{
+    return find_free_run_locked( horizon_native_window_start, horizon_native_window_end, size );
 }
 
 static void *find_anchor_address_locked( size_t size )
@@ -15358,6 +15670,156 @@ static void *find_anchor_address_locked( size_t size )
         anchor_region_end = (char *)region + region_size;
     }
     return find_anchor_run_locked( size );
+}
+
+/* Code memory for the dynarec's arenas, placed in the same window and walked
+ * the same way: what libnx's random probe could not find. Both aliases are
+ * mapped while the window is locked, so the second walk sees the first one and
+ * nothing else can take the range in between. */
+/* Where a code arena may go. A program Wine runs here is 32-bit, so every
+ * address it can name is below 4 GB: on a 36- or 39-bit address space the
+ * range above that is the runtime's to use and no arena need cost the program
+ * anything. Only when the whole address space is 4 GB do the two share, and
+ * then the window is all a code mapping may use, since everything else below
+ * 4 GB is reserved for the program. */
+static void *find_code_run_locked( size_t size )
+{
+    void *space_start, *space_limit;
+
+    horizon_get_address_space_limits( &space_start, &space_limit );
+    if ((unsigned long long)(uintptr_t)space_limit > WINE_NX_GUEST_LIMIT)
+        return find_free_run_locked( (char *)(uintptr_t)WINE_NX_GUEST_LIMIT, space_limit, size );
+    return find_anchor_region_locked( size );
+}
+
+int wine_nx_code_memory_map( void *source, size_t size, struct wine_nx_code_memory *out, unsigned int *rc )
+{
+    Handle handle = INVALID_HANDLE;
+    Result res;
+
+    memset( out, 0, sizeof(*out) );
+    *rc = 0;
+    if (R_FAILED( (res = svcCreateCodeMemory( &handle, source, size )) ))
+    {
+        *rc = res;
+        return 0;
+    }
+    pthread_mutex_lock( &mapping_mutex );
+    virtmemLock();
+    if ((out->rw = find_code_run_locked( size )))
+    {
+        if (R_FAILED( (res = svcControlCodeMemory( handle, CodeMapOperation_MapOwner,
+                                                  out->rw, size, Perm_Rw )) ))
+            out->rw = NULL;
+        else
+            out->rw_token = virtmemAddReservation( out->rw, size );
+    }
+    if (out->rw && (out->rx = find_code_run_locked( size )))
+    {
+        if (R_FAILED( (res = svcControlCodeMemory( handle, CodeMapOperation_MapSlave,
+                                                  out->rx, size, Perm_Rx )) ))
+            out->rx = NULL;
+        else
+            out->rx_token = virtmemAddReservation( out->rx, size );
+    }
+    virtmemUnlock();
+    pthread_mutex_unlock( &mapping_mutex );
+
+    if (out->rw && out->rx)
+    {
+        out->handle = handle;
+        out->size = size;
+        return 1;
+    }
+    *rc = res;  /* 0 when the window simply had no run that large */
+    if (out->rw)
+        svcControlCodeMemory( handle, CodeMapOperation_UnmapOwner, out->rw, size, 0 );
+    virtmemLock();
+    if (out->rw_token) virtmemRemoveReservation( out->rw_token );
+    if (out->rx_token) virtmemRemoveReservation( out->rx_token );
+    virtmemUnlock();
+    svcCloseHandle( handle );
+    memset( out, 0, sizeof(*out) );
+    return 0;
+}
+
+void wine_nx_code_memory_unmap( struct wine_nx_code_memory *memory )
+{
+    if (!memory->handle) return;
+    svcControlCodeMemory( memory->handle, CodeMapOperation_UnmapSlave,
+                          memory->rx, memory->size, 0 );
+    svcControlCodeMemory( memory->handle, CodeMapOperation_UnmapOwner,
+                          memory->rw, memory->size, 0 );
+    svcCloseHandle( memory->handle );
+    virtmemLock();
+    if (memory->rw_token) virtmemRemoveReservation( memory->rw_token );
+    if (memory->rx_token) virtmemRemoveReservation( memory->rx_token );
+    virtmemUnlock();
+    memset( memory, 0, sizeof(*memory) );
+}
+
+/* The largest run the window still holds: what the next arena may ask for, and
+ * in the log the difference between a window that is full and a kernel that
+ * has no code memory object left. The kernel keeps one block per free run, so
+ * each unmapped block is a whole run; only this runtime's own mappings, which
+ * it may hold before the kernel does, still have to be taken off it. */
+size_t wine_nx_native_window_free(void)
+{
+    char *candidate = horizon_native_window_start, *end = horizon_native_window_end;
+    void *space_start, *space_limit;
+    size_t largest = 0;
+
+    horizon_get_address_space_limits( &space_start, &space_limit );
+    if ((unsigned long long)(uintptr_t)space_limit > WINE_NX_GUEST_LIMIT)
+    {
+        /* Above the program's 4 GB, where an arena takes nothing from it. */
+        candidate = (char *)(uintptr_t)WINE_NX_GUEST_LIMIT;
+        end = space_limit;
+    }
+    if (!candidate || !end) return 0;
+    pthread_mutex_lock( &mapping_mutex );
+    virtmemLock();
+    while (candidate < end)
+    {
+        struct horizon_mapping *overlap;
+        struct horizon_region region;
+        char *run_end, *region_end;
+        unsigned int i;
+
+        /* Taken: an anchor region, one of this runtime's mappings, or a block
+         * the kernel has. Otherwise free until the first of those. */
+        if ((region_end = anchor_region_end_overlapping( candidate, 1 )))
+        {
+            candidate = region_end;
+            continue;
+        }
+        if (!horizon_query_region( NULL, (unsigned long long)(uintptr_t)candidate, &region )) break;
+        run_end = (char *)(uintptr_t)(region.addr + region.size);
+        if (run_end <= candidate) break;
+        if (run_end > end) run_end = end;
+        if (region.type != HORIZON_MEMTYPE_UNMAPPED)
+        {
+            candidate = run_end;
+            continue;
+        }
+        if ((overlap = find_overlap_mapping( candidate, (size_t)(run_end - candidate) )))
+        {
+            if ((char *)overlap->addr <= candidate)
+            {
+                candidate = (char *)overlap->addr + overlap->size;
+                continue;
+            }
+            run_end = overlap->addr;
+        }
+        for (i = 0; i < anchor_region_count; i++)
+            if (anchor_regions[i].start > candidate && anchor_regions[i].start < run_end)
+                run_end = anchor_regions[i].start;
+        if ((size_t)(run_end - candidate) > largest) largest = (size_t)(run_end - candidate);
+        candidate = run_end;
+    }
+    virtmemUnlock();
+    pthread_mutex_unlock( &mapping_mutex );
+    return largest;
 }
 
 static void *horizon_section_anchor( void *source, size_t size, void **token )

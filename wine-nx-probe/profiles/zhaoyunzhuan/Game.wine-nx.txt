@@ -1,4 +1,5 @@
 title=三国赵云传
+address-space=32-bit
 own-controls=1
 aspect-fit=800x600
 touch-coordinates=screen

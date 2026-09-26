@@ -90,7 +90,8 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
                     lambda d: next(p for p in d['profiles'] if p['id'] == 'pal3').update(min_api=8),
                     lambda d: next(p for p in d['profiles'] if p['id'] == 'pal3').update(min_api=9),
                     lambda d: next(p for p in d['profiles'] if p['id'] == 'zhaoyunzhuan').update(min_api=11),
-                    lambda d: next(p for p in d['profiles'] if p['id'] == 'newpalxp').update(min_api=11)):
+                    lambda d: next(p for p in d['profiles'] if p['id'] == 'newpalxp').update(min_api=11),
+                    lambda d: next(p for p in d['profiles'] if p['id'] == 'dmc4-dx9').update(min_api=13)):
         broken = json.loads(json.dumps(data)); mutator(broken)
         fixture = maintenance / 'catalog.json'; fixture.write_text(json.dumps(broken))
         try:
@@ -192,10 +193,18 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
     current_keys = legacy_keys.read_text()
     legacy_keys.write_text(re.sub(r'^X=click:\d+,\d+(?:,[12])?$', 'X=0x0d', current_keys,
                                   flags=re.MULTILINE).replace('PLUS=click:1240,40', 'PLUS=0x1b'))
+    # The legacy fixture predates native gamepad targets in keys.txt.
+    legacy_pad_keys = maintenance / 'dmc4-dx9/DevilMayCry4_DX9.keys.txt'
+    current_pad_keys = legacy_pad_keys.read_text()
+    legacy_pad_keys.write_text(re.sub(r'^([ABXY])=0x20[0-3]$',
+                                    lambda m: m[1] + '=' + {'A': '0x1b', 'B': '0x0d',
+                                                            'X': '0x00', 'Y': '0x00'}[m[1]],
+                                    current_pad_keys, flags=re.MULTILINE))
     (maintenance / 'catalog.json').write_text(json.dumps(legacy))
     pack.build(maintenance / 'catalog.json', root / 'legacy.zip')
     run(core, root / 'legacy.zip')
     legacy_keys.write_text(current_keys)
+    legacy_pad_keys.write_text(current_pad_keys)
 
     fixture = json.loads(json.dumps(data))
     fixture['profiles'][0]['cheats'] = 'test-cheats.json'
@@ -278,6 +287,10 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
     newer = json.loads(json.dumps(data)); newer['profiles'][0]['version'] += 1
     (maintenance / 'catalog.json').write_text(json.dumps(newer))
     pack.build_release(maintenance / 'catalog.json', updated)
+    prompt_input = root / 'prompt-input'
+    run(*common, PROBE / 'tests/launcher_prompt_input.c', PROBE / 'source/launcher_ui.c',
+        PROBE / 'source/launcher_svg.c', *flags('sdl2', 'SDL2_ttf', 'libpng'), '-lm', '-o', prompt_input)
+    run(prompt_input)
     ui = root / 'ui'
     run(*common, '-Wno-deprecated-declarations', shim, PROBE / 'tests/launcher_profiles.c',
         PROBE / 'source/launcher_profiles.c', PROBE / 'source/game_profiles.c', PROBE / 'source/game_cheats.c',

@@ -1705,6 +1705,7 @@ enum program_row
     ROW_START, ROW_FAVORITE, ROW_ARTWORK, ROW_LOCATE, ROW_TITLE, ROW_ARGS, ROW_VERBOSE, ROW_PROFILE,
     ROW_WINDOWS, ROW_D3D9, ROW_VKD3D_VERSION, ROW_DXVK_VERSION, ROW_DXVK_HUD, ROW_FRAME_LIMIT, ROW_VSYNC,
     ROW_LSFG, ROW_LSFG_DLL, ROW_LSFG_PERFORMANCE, ROW_LSFG_FLOW,
+    ROW_UPSCALING, ROW_UPSCALING_SHARPNESS,
     ROW_ADDRESS, ROW_OWN_CONTROLS, ROW_CONTROLS, ROW_BOX64,
     ROW_HIDE, ROW_LIBRARY, ROW_ADAPTATION, ROW_CHEATS, PROGRAM_ROWS
 };
@@ -1759,13 +1760,14 @@ static int install_forwarder( struct launcher *l, int bits, unsigned long long *
         ui_start_screen( ui );
         return 0;
     }
+    snprintf( value, sizeof(value), "%016llX", id ? *id : 0ull );
     if (bits == 32)
     {
-        snprintf( value, sizeof(value), "%016llX", id ? *id : 0ull );
         launcher_kv_set( &l->look, "forwarder-32bit", value );
         launcher_kv_set( &l->look, "forwarder-32bit-name", name );
-        save_look( l );
     }
+    else launcher_kv_set( &l->look, "forwarder-39bit", value );
+    save_look( l );
     return 1;
 }
 
@@ -1878,13 +1880,12 @@ static int next_state( int state, int direction )
     return order[(i + (direction < 0 ? 2 : 1)) % 3];
 }
 
-/* What the program needs of the address space: what it was told, or what the
- * program itself says when it was told nothing. */
+/* An explicit setting wins; an absent setting uses the CN 32-bit default. */
 static enum launcher_address_space program_address_space( struct program *p )
 {
     if (p->settings.address_space >= 0)
         return p->settings.address_space ? LAUNCHER_ADDRESS_LOW : LAUNCHER_ADDRESS_ANY;
-    return launcher_program_address_space( p->path );
+    return LAUNCHER_ADDRESS_LOW;
 }
 
 /* Whether this process can run it at all. Nothing here can widen or narrow the
@@ -1893,6 +1894,17 @@ static int address_space_fits( struct launcher *l, struct program *p )
 {
     return !l->options->address_space_bits || l->options->address_space_bits == 32 ||
            program_address_space( p ) != LAUNCHER_ADDRESS_LOW;
+}
+
+/* Whether a game that runs anywhere is better off in Autorun itself. A 32-bit
+ * forwarder gives the game, Wine, Box64's code and DXVK's memory the low 4 GB
+ * to share, and a large game runs out of it and closes; 39 bits keep all but
+ * the game above it. Only a game explicitly set to Any goes; an absent
+ * setting uses the 32-bit default and stays here. */
+static int address_space_cramped( struct launcher *l, struct program *p )
+{
+    return l->options->address_space_bits == 32 && l->options->launch_title &&
+           program_address_space( p ) == LAUNCHER_ADDRESS_ANY;
 }
 
 /* The forwarder named under Settings, and whether the console still has it.
@@ -1911,6 +1923,97 @@ static unsigned long long chosen_forwarder( struct launcher *l, char *name, size
     /* Without the console to ask, take it on trust rather than refuse. */
     if (installed) *installed = !l->options->title_installed || l->options->title_installed( id );
     return id;
+}
+
+/* Autorun on the home menu with 39 bits: the one made from here, or else the
+ * one this program would make, if the console has it. */
+static unsigned long long main_forwarder( struct launcher *l, int *installed )
+{
+    char value[64] = "";
+    unsigned long long id = 0;
+
+    *installed = 0;
+    if (launcher_kv_get( &l->look, "forwarder-39bit", value, sizeof(value) ) && value[0])
+        id = strtoull( value, NULL, 16 );
+    if ((!id || (l->options->title_installed && !l->options->title_installed( id ))) &&
+        l->options->forwarder_id)
+        id = l->options->forwarder_id( 39 );
+    if (!id || id == l->options->title_id) return 0;
+    *installed = !l->options->title_installed || l->options->title_installed( id );
+    return id;
+}
+
+/* The game goes to the forwarder made with the bits it needs, which the
+ * console opens in this one's place. Returns 0 when it is to start here after
+ * all, 1 when it went or the user turned it back. */
+static int hand_over( struct launcher *l, struct program *p, int bits )
+{
+    struct ui *ui = &l->ui;
+    char message[512], name[128] = "", path[512];
+    int installed = 0;
+    unsigned long long id = bits == 32 ? chosen_forwarder( l, name, sizeof(name), &installed )
+                                       : main_forwarder( l, &installed );
+
+    if (bits != 32) snprintf( name, sizeof(name), "Autorun" );
+    /* Named, still installed, and the console will open it: nothing to ask
+     * about -- the game goes there. */
+    if (!id || !installed || !l->options->launch_title)
+    {
+        if (bits == 32)
+        {
+            snprintf( message, sizeof(message),
+                      "%s%s 需要低 4 GB 地址空间。当前 Autorun 使用 %d 位地址空间，起始地址高于该范围。"
+                      "\n\n32 位转发器可提供游戏需要的地址范围。",
+                      id && !installed ? "此前选择的 32 位转发器已失效。" : "", p->title,
+                      l->options->address_space_bits );
+            if (!l->options->install_forwarder || !l->options->launch_title)
+            {
+                ui_message( ui, "32-bit forwarder needed", message );
+                return 1;
+            }
+            if (!ui_confirm( ui, "32-bit forwarder needed", message, "Install now" ))
+            {
+                ui_start_screen( ui );
+                return 1;
+            }
+        }
+        else
+        {
+            /* Nothing to send it to and no way to make it: as before, here. */
+            if (!l->options->install_forwarder) return 0;
+            snprintf( message, sizeof(message),
+                      "%s 不需要低地址转发器。在 32 位地址空间中，游戏与 Wine、图形层共享低 4 GB，"
+                      "大型游戏可能因内存不足退出。39 位 Autorun 可提供更多空间。"
+                      "\n\n若要继续在此运行，请把游戏的地址空间设为 32 位。",
+                      p->title );
+            if (!ui_confirm( ui, "Autorun forwarder needed", message, "Install now" ))
+            {
+                ui_start_screen( ui );
+                return 1;
+            }
+        }
+        if (!install_forwarder( l, bits, &id )) return 1;
+    }
+    /* The game goes on the card before the forwarder is asked for, because
+     * once the console takes the request nothing here runs again. */
+    runtime_file( l, "run-next.txt", path, sizeof(path) );
+    if (!write_line( path, p->path ))
+    {
+        ui_toast( ui, "Could not write run-next.txt", 2500 );
+        return 1;
+    }
+    p->launched_order = l->catalog.next_order++;
+    save_library( l );
+    if (l->options->launch_title( id ))
+    {
+        snprintf( message, sizeof(message), "正在打开 %s…", bits == 32 ? "32 位转发器" : "Autorun" );
+        ui_toast( ui, message, 4000 );
+        return 1;
+    }
+    remove( path );
+    snprintf( message, sizeof(message), "主机拒绝打开 %s。", name[0] ? name : "转发器" );
+    ui_message( ui, "Could not open it", message );
+    return 1;
 }
 
 static int start_program( struct launcher *l, struct program *p, char *target, size_t size )
@@ -1934,54 +2037,8 @@ static int start_program( struct launcher *l, struct program *p, char *target, s
         ui_message( ui, "Game unavailable", "The executable is missing or is not supported by this build." );
         return 0;
     }
-    if (!address_space_fits( l, p ))
-    {
-        char message[512], name[128] = "";
-        int installed = 0;
-        unsigned long long id = chosen_forwarder( l, name, sizeof(name), &installed );
-
-        /* Named, still installed, and the console will open it: nothing to ask
-         * about -- the game goes there. */
-        if (!id || !installed || !l->options->launch_title)
-        {
-            snprintf( message, sizeof(message),
-                      "%s%s 需要低 4 GB 地址空间。Autorun 当前使用 %d 位地址空间，起始地址高于此范围。\n\n"
-                      "32 位转发器可在游戏所需的地址空间启动 Autorun。",
-                      id && !installed ? "32 位转发器已失效。" : "", p->title,
-                      l->options->address_space_bits );
-            if (!l->options->install_forwarder || !l->options->launch_title)
-            {
-                ui_message( ui, "32-bit forwarder needed", message );
-                return 0;
-            }
-            if (!ui_confirm( ui, "32-bit forwarder needed", message, "Install now" ))
-            {
-                ui_start_screen( ui );
-                return 0;
-            }
-            if (!install_forwarder( l, 32, &id )) return 0;
-            installed = 1;
-        }
-        /* The game goes on the card before the forwarder is asked for, because
-         * once the console takes the request nothing here runs again. */
-        runtime_file( l, "run-next.txt", path, sizeof(path) );
-        if (!write_line( path, p->path ))
-        {
-            ui_toast( ui, "Could not write run-next.txt", 2500 );
-            return 0;
-        }
-        p->launched_order = l->catalog.next_order++;
-        save_library( l );
-        if (l->options->launch_title( id ))
-        {
-            ui_toast( ui, "Opening the 32-bit forwarder...", 4000 );
-            return 0;
-        }
-        remove( path );
-        snprintf( message, sizeof(message), "主机拒绝打开 %s。", name[0] ? name : "转发器" );
-        ui_message( ui, "Could not open it", message );
-        return 0;
-    }
+    if (!address_space_fits( l, p ) && hand_over( l, p, 32 )) return 0;
+    if (address_space_cramped( l, p ) && hand_over( l, p, 39 )) return 0;
     p->missing = 0;
     p->launched_order = l->catalog.next_order++;
     save_library( l );
@@ -2329,13 +2386,17 @@ static int program_menu( struct launcher *l, struct program *p, char *target, si
     struct ui *ui = &l->ui;
     char path[520], dir[512], line[896], global_line[896], name[128], buffer[64];
     struct program copy;
-    enum game_profile_result recovered = launcher_profiles_recover( l->options->runtime_dir, p->path );
-    if (recovered != GAME_PROFILE_OK)
+    if (!file_exists( p->path )) p->missing = 1;
+    if (!p->missing)
     {
-        ui_message( ui, "适配配置需要恢复", game_profile_error( recovered ) );
-        return 0;
+        enum game_profile_result recovered = launcher_profiles_recover( l->options->runtime_dir, p->path );
+        if (recovered != GAME_PROFILE_OK)
+        {
+            ui_message( ui, "适配配置需要恢复", game_profile_error( recovered ) );
+            return 0;
+        }
+        load_program_settings( l, p );
     }
-    load_program_settings( l, p );
 
     for (;;)
     {
@@ -2380,6 +2441,21 @@ static int program_menu( struct launcher *l, struct program *p, char *target, si
              row->group = (section); row->kind = UI_ROW_ACTION; \
              snprintf( row->label, sizeof(row->label), "%s", (text) ); row->help = (help_text); } while (0)
 
+        /* Managing a stale catalog entry must not require its game files or
+         * profile recovery. Keep the two useful actions on the first page. */
+        if (p->missing)
+        {
+            section = SECTION_GENERAL;
+            ADD_ROW( ROW_LOCATE, SECTION_GENERAL, "Locate executable", "Choose the game's executable at its new location." );
+            if (in_library)
+            {
+                ADD_ROW( ROW_LIBRARY, SECTION_GENERAL, "Remove from the library",
+                         "移除此游戏的入口和最近游玩记录，不删除游戏文件、存档或适配配置。" );
+                row->destructive = 1;
+            }
+            goto menu_ready;
+        }
+
         ADD_ROW( ROW_START, SECTION_GENERAL, "Start", "Runs the game." );
         ADD_ROW( ROW_ADAPTATION, SECTION_GENERAL, "适配包更新",
                  "手动选择适配包，可按名称筛选；绑定后检查并更新对应游戏配置和默认按键。" );
@@ -2392,7 +2468,6 @@ static int program_menu( struct launcher *l, struct program *p, char *target, si
         row->kind = UI_ROW_SWITCH;
         row->on = p->favorite;
         ADD_ROW( ROW_ARTWORK, SECTION_LIBRARY, "Download artwork", "Takes the highest-rated square, portrait and hero pictures for this game from SteamGridDB." );
-        if (p->missing) ADD_ROW( ROW_LOCATE, SECTION_LIBRARY, "Locate executable", "Choose the game's executable at its new location." );
         ADD_ROW( ROW_TITLE, SECTION_GENERAL, "Title",
                  "The name shown in the library. Y goes back to the name in the program's own resources." );
         row->kind = UI_ROW_VALUE;
@@ -2410,14 +2485,14 @@ static int program_menu( struct launcher *l, struct program *p, char *target, si
         else snprintf( row->value, sizeof(row->value), "None" );
 
         ADD_ROW( ROW_VERBOSE, SECTION_DIAGNOSTICS, "Verbose traces",
-                 "Writes Wine's traces to wine-nx-runtime.log, which slows the program down. "
+                 "Writes Wine's traces to autorun_runtime.log, which slows the program down. "
                  "Global follows the setting in Settings (X on the library)." );
         row->adjustable = 1;
         snprintf( row->value, sizeof(row->value), "%s",
                   state_text( p->settings.verbose, l->options->verbose, "On", "Off", buffer, sizeof(buffer) ) );
 
         ADD_ROW( ROW_PROFILE, SECTION_DIAGNOSTICS, "Profiler",
-                 "Samples where every thread spends its time and writes [PROF] lines to wine-nx-runtime.log." );
+                 "Samples where every thread spends its time and writes [PROF] lines to autorun_runtime.log." );
         row->adjustable = 1;
         snprintf( row->value, sizeof(row->value), "%s",
                   state_text( p->settings.profile, l->options->profile, "On", "Off", buffer, sizeof(buffer) ) );
@@ -2479,6 +2554,22 @@ static int program_menu( struct launcher *l, struct program *p, char *target, si
             row->kind = UI_ROW_SWITCH;
             row->on = p->settings.vsync;
             snprintf( row->value, sizeof(row->value), "%s", p->settings.vsync ? "Enabled" : "Disabled" );
+
+            ADD_ROW( ROW_UPSCALING, SECTION_GRAPHICS, "Upscaling",
+                     "How a Vulkan or DXVK game drawing fewer pixels than the screen is enlarged. FSR 1.0 is "
+                     "AMD's edge-aware upscaler with sharpening. Integer enlarges by whole steps with square "
+                     "pixels for pixel art, leaving wider black bars." );
+            row->kind = UI_ROW_DROPDOWN;
+            snprintf( row->value, sizeof(row->value), "%s", launcher_upscaling_labels[p->settings.upscaling] );
+
+            if (p->settings.upscaling == 1)
+            {
+                ADD_ROW( ROW_UPSCALING_SHARPNESS, SECTION_GRAPHICS, "FSR Sharpness",
+                         "How strongly FSR's second pass (RCAS) sharpens the enlarged picture. 0% leaves it "
+                         "as the first pass drew it." );
+                row->kind = UI_ROW_DROPDOWN;
+                snprintf( row->value, sizeof(row->value), "%s", launcher_sharpness_labels[p->settings.upscaling_sharpness] );
+            }
         }
 
 #ifdef WINE_NX_LSFG
@@ -2526,19 +2617,14 @@ static int program_menu( struct launcher *l, struct program *p, char *target, si
 #endif
 
         {
-            enum launcher_address_space needs = launcher_program_address_space( p->path );
-
             ADD_ROW( ROW_ADDRESS, SECTION_GRAPHICS, "Address space",
-                     "What the game needs of the address space Horizon gives Autorun. A game linked for a "
-                     "fixed address in the low 4 GB runs only under a forwarder made with 32 bits; the "
-                     "forwarder decides this, and a game that needs one it was not given is not started." );
+                     "未配置时默认使用 32 位地址空间，需由 32 位转发器启动。显式选择“任意”时，"
+                     "从 32 位转发器启动会转交到已设置的 39 位 Autorun。重置此项恢复默认 32 位。" );
             row->adjustable = 1;
             if (p->settings.address_space >= 0)
                 snprintf( row->value, sizeof(row->value), "%s",
                           p->settings.address_space ? "32-bit" : "Any" );
-            else snprintf( row->value, sizeof(row->value), "自动（%s）",
-                           needs == LAUNCHER_ADDRESS_LOW ? "32 位" :
-                           needs == LAUNCHER_ADDRESS_ANY ? "任意" : "未读取" );
+            else snprintf( row->value, sizeof(row->value), "默认（32 位）" );
         }
 
         {
@@ -2586,8 +2672,9 @@ static int program_menu( struct launcher *l, struct program *p, char *target, si
         }
 #undef ADD_ROW
 
+menu_ready:
         action = ui_settings_run( ui, &list, "Game Settings", p->title, sections,
-                                  sizeof(sections) / sizeof(sections[0]), rows, count, 1, &section );
+                                  p->missing ? 1 : sizeof(sections) / sizeof(sections[0]), rows, count, 1, &section );
         if (action == UI_ACTION_BACK || action == UI_ACTION_QUIT) return 0;
         /* The screen shows one section at a time, so the row it chose is the
          * selection counted within that section. */
@@ -2738,6 +2825,40 @@ static int program_menu( struct launcher *l, struct program *p, char *target, si
             break;
         }
 
+        case ROW_UPSCALING:
+            if (action == UI_ACTION_RESET) p->settings.upscaling = 0;
+            else if (action == UI_ACTION_CHOOSE)
+            {
+                struct ui_row items[LAUNCHER_UPSCALING_COUNT] = {0};
+                int selected;
+
+                for (i = 0; i < LAUNCHER_UPSCALING_COUNT; i++)
+                    snprintf( items[i].label, sizeof(items[i].label), "%s", launcher_upscaling_labels[i] );
+                selected = ui_settings_dropdown( ui, &list, items, LAUNCHER_UPSCALING_COUNT, p->settings.upscaling );
+                if (selected < 0) break;
+                p->settings.upscaling = selected;
+            }
+            else break;
+            save_program_settings( l, p );
+            break;
+
+        case ROW_UPSCALING_SHARPNESS:
+            if (action == UI_ACTION_RESET) p->settings.upscaling_sharpness = 2;
+            else if (action == UI_ACTION_CHOOSE)
+            {
+                struct ui_row items[LAUNCHER_SHARPNESS_COUNT] = {0};
+                int selected;
+
+                for (i = 0; i < LAUNCHER_SHARPNESS_COUNT; i++)
+                    snprintf( items[i].label, sizeof(items[i].label), "%s", launcher_sharpness_labels[i] );
+                selected = ui_settings_dropdown( ui, &list, items, LAUNCHER_SHARPNESS_COUNT, p->settings.upscaling_sharpness );
+                if (selected < 0) break;
+                p->settings.upscaling_sharpness = selected;
+            }
+            else break;
+            save_program_settings( l, p );
+            break;
+
 #ifdef WINE_NX_LSFG
         case ROW_LSFG:
         case ROW_LSFG_PERFORMANCE:
@@ -2768,7 +2889,7 @@ static int program_menu( struct launcher *l, struct program *p, char *target, si
 #endif
 
         case ROW_ADDRESS:
-            /* Auto, then what the two answers are, so either can be forced. */
+            /* Default (32-bit), then the two explicit overrides. */
             p->settings.address_space = action == UI_ACTION_RESET ? -1 :
                                         next_state( p->settings.address_space, action == UI_ACTION_LEFT ? -1 : 1 );
             save_program_settings( l, p );
@@ -2824,6 +2945,7 @@ static int program_menu( struct launcher *l, struct program *p, char *target, si
                     break;
                 }
                 ui_toast( ui, "Removed from the library", 1500 );
+                if (p->missing) return 0;
                 /* p may be the removed entry itself; the menu goes on with a copy. */
                 copy = *p;
                 copy.icon = NULL;
@@ -2852,8 +2974,9 @@ static int program_menu( struct launcher *l, struct program *p, char *target, si
 enum settings_row
 {
     SET_HIDDEN, SET_HIDE_MISSING, SET_DXVK_ON_ADD, SET_VERBOSE, SET_PROFILE, SET_WINDOWS,
+    SET_VERSION, SET_UPDATE, SET_OSK, SET_SWKBD, SET_COMPONENTS, SET_SD_CACHE, SET_GAME_DXVK_CONF,
     SET_CONTROLS, SET_STEAMGRIDDB,
-    SET_VERSION, SET_UPDATE, SET_PROFILE_INDEX, SET_REOPEN, SET_FORWARDER, SET_MAKE_32BIT, SET_MAKE_MAIN,
+    SET_PROFILE_INDEX, SET_REOPEN, SET_FORWARDER, SET_MAKE_32BIT, SET_MAKE_MAIN,
     SET_CREDITS, SETTINGS_ROWS
 };
 
@@ -3079,29 +3202,34 @@ static enum device_choice next_device_choice( int device, enum device_choice fro
 
 /* The whole list of keys, starting on the one the control sends now. Returns
  * the code chosen, or -1 for the way out. */
-static int key_screen( struct launcher *l, const char *control_label, unsigned short current )
+static int key_screen( struct launcher *l, int control, unsigned short current )
 {
     static struct ui_row rows[WINE_NX_KEY_NAME_COUNT];
+    int choices[WINE_NX_KEY_NAME_COUNT];
     struct ui_list list = {0};
     char title[128];
-    int i, at = wine_nx_key_index( current );
+    int i, count = 0, at = 0;
 
     memset( rows, 0, sizeof(rows) );
     for (i = 0; i < WINE_NX_KEY_NAME_COUNT; i++)
     {
-        snprintf( rows[i].label, sizeof(rows[i].label), "%s", wine_nx_key_names[i].name );
+        if (!wine_nx_control_key_allowed( control, wine_nx_key_names[i].code )) continue;
+        choices[count] = i;
+        if (wine_nx_key_names[i].code == current) at = count;
+        snprintf( rows[count].label, sizeof(rows[count].label), "%s", wine_nx_key_names[i].name );
         if (wine_nx_key_names[i].code)
-            snprintf( rows[i].value, sizeof(rows[i].value), "0x%02x", wine_nx_key_names[i].code );
+            snprintf( rows[count].value, sizeof(rows[count].value), "0x%02x", wine_nx_key_names[i].code );
+        count++;
     }
-    snprintf( title, sizeof(title), "%s 发送的按键", ui_translate( control_label ) );
+    snprintf( title, sizeof(title), "%s 发送的按键", ui_translate( wine_nx_controls[control].label ) );
     list.selection = at > 0 ? at : 0;
     for (;;)
     {
         enum ui_action action = ui_list_run( &l->ui, &list, title, "Controls", rows,
-                                             WINE_NX_KEY_NAME_COUNT, 0 );
+                                             count, 0 );
 
         if (action == UI_ACTION_BACK || action == UI_ACTION_QUIT) return -1;
-        if (action == UI_ACTION_CHOOSE) return wine_nx_key_names[list.selection].code;
+        if (action == UI_ACTION_CHOOSE) return wine_nx_key_names[choices[list.selection]].code;
     }
 }
 
@@ -3189,7 +3317,7 @@ static void controls_screen( struct launcher *l, const char *path, const char *u
         {
         case UI_ACTION_CHOOSE:
         {
-            int picked = key_screen( l, wine_nx_controls[i].label, code );
+            int picked = key_screen( l, i, code );
 
             ui_start_screen( &l->ui );
             if (picked >= 0 && picked != code) { set_control_key( &keys, i, picked ); changed = 1; }
@@ -3206,6 +3334,8 @@ static void controls_screen( struct launcher *l, const char *path, const char *u
             else at += action == UI_ACTION_RIGHT ? 1 : -1;
             if (at < 0) at = WINE_NX_KEY_NAME_COUNT - 1;
             if (at >= WINE_NX_KEY_NAME_COUNT) at = 0;
+            while (!wine_nx_control_key_allowed( i, wine_nx_key_names[at].code ))
+                at = (at + (action == UI_ACTION_RIGHT ? 1 : WINE_NX_KEY_NAME_COUNT - 1)) % WINE_NX_KEY_NAME_COUNT;
             set_control_key( &keys, i, wine_nx_key_names[at].code );
             changed = 1;
             break;
@@ -3279,6 +3409,9 @@ static void settings_menu( struct launcher *l )
             [SET_WINDOWS] = SET_SECTION_DEFAULTS, [SET_CONTROLS] = SET_SECTION_DEFAULTS,
             [SET_STEAMGRIDDB] = SET_SECTION_ARTWORK,
             [SET_REOPEN] = SET_SECTION_SYSTEM,
+            [SET_OSK] = SET_SECTION_SYSTEM, [SET_SWKBD] = SET_SECTION_SYSTEM,
+            [SET_COMPONENTS] = SET_SECTION_SYSTEM, [SET_SD_CACHE] = SET_SECTION_SYSTEM,
+            [SET_GAME_DXVK_CONF] = SET_SECTION_SYSTEM,
             [SET_VERSION] = SET_SECTION_SYSTEM,
             [SET_UPDATE] = SET_SECTION_SYSTEM,
             [SET_PROFILE_INDEX] = SET_SECTION_SYSTEM,
@@ -3313,7 +3446,7 @@ static void settings_menu( struct launcher *l )
         snprintf( rows[SET_VERBOSE].value, sizeof(rows[0].value), "%s", on_off[!!l->options->verbose] );
         rows[SET_VERBOSE].kind = UI_ROW_SWITCH;
         rows[SET_VERBOSE].on = !!l->options->verbose;
-        rows[SET_VERBOSE].help = "Wine's traces go to wine-nx-runtime.log for every program without its own setting.";
+        rows[SET_VERBOSE].help = "Wine's traces go to autorun_runtime.log for every program without its own setting.";
         snprintf( rows[SET_PROFILE].label, sizeof(rows[0].label), "Profiler" );
         snprintf( rows[SET_PROFILE].value, sizeof(rows[0].value), "%s", on_off[!!l->options->profile] );
         rows[SET_PROFILE].kind = UI_ROW_SWITCH;
@@ -3387,9 +3520,37 @@ static void settings_menu( struct launcher *l )
         snprintf( rows[SET_MAKE_MAIN].value, sizeof(rows[0].value), "%s",
                   l->options->install_forwarder ? "Autorun" : "Unavailable" );
         rows[SET_MAKE_MAIN].help = "Autorun itself on the home menu with the 39-bit address space required "
-                                   "by AMD64 programs. Only on an emuMMC.";
+                                   "by AMD64 programs. Games that need no 32-bit forwarder are sent to it "
+                                   "from one. Only on an emuMMC.";
         rows[SET_MAKE_MAIN].adjustable = 0;
         rows[SET_MAKE_MAIN].disabled = !l->options->install_forwarder;
+        snprintf( rows[SET_SD_CACHE].label, sizeof(rows[0].label), "SD 缓存使用 CN 策略" );
+        snprintf( rows[SET_SD_CACHE].value, sizeof(rows[0].value), "%s",
+                  l->options->sd_cache_cn ? "CN 保留策略" : "上游完整策略" );
+        rows[SET_SD_CACHE].kind = UI_ROW_SWITCH;
+        rows[SET_SD_CACHE].on = !!l->options->sd_cache_cn;
+        rows[SET_SD_CACHE].help = "默认开启，采用 CN 读缓存及按游戏启用的元数据／干净写句柄策略。关闭后采用上游路径 stat 缓存和延迟写入。完全退出并重新打开 Autorun 后生效。";
+        snprintf( rows[SET_OSK].label, sizeof(rows[0].label), "浮动屏幕键盘" );
+        snprintf( rows[SET_OSK].value, sizeof(rows[0].value), "%s", on_off[!!l->options->osk_enabled] );
+        rows[SET_OSK].kind = UI_ROW_SWITCH;
+        rows[SET_OSK].on = !!l->options->osk_enabled;
+        rows[SET_OSK].help = "默认开启，采用上游方式。可用 Minus + 右摇杆按下呼出，或由程序请求打开；关闭后停用浮动键盘。";
+        snprintf( rows[SET_COMPONENTS].label, sizeof(rows[0].label), "首次运行自动注册组件" );
+        snprintf( rows[SET_COMPONENTS].value, sizeof(rows[0].value), "%s", on_off[!!l->options->components_auto] );
+        rows[SET_COMPONENTS].kind = UI_ROW_SWITCH;
+        rows[SET_COMPONENTS].on = !!l->options->components_auto;
+        rows[SET_COMPONENTS].help = "默认开启，首次启动游戏前注册 DirectShow、DMO 和音频解码器，并重启进入游戏。已有完成标记时跳过；关闭后不自动注册。";
+        snprintf( rows[SET_SWKBD].value, sizeof(rows[0].value), "%s", on_off[!!l->options->swkbd_auto] );
+        rows[SET_SWKBD].kind = UI_ROW_SWITCH;
+        rows[SET_SWKBD].on = !!l->options->swkbd_auto;
+        snprintf( rows[SET_SWKBD].label, sizeof(rows[0].label), "文本框聚焦时自动打开键盘" );
+        rows[SET_SWKBD].disabled = !l->options->osk_enabled;
+        rows[SET_SWKBD].help = "默认开启。浮动屏幕键盘开启后，文本框获得焦点时自动呼出；可单独关闭。";
+        snprintf( rows[SET_GAME_DXVK_CONF].label, sizeof(rows[0].label), "读取游戏目录 dxvk.conf" );
+        snprintf( rows[SET_GAME_DXVK_CONF].value, sizeof(rows[0].value), "%s", on_off[!!l->options->read_game_dxvk_conf] );
+        rows[SET_GAME_DXVK_CONF].kind = UI_ROW_SWITCH;
+        rows[SET_GAME_DXVK_CONF].on = !!l->options->read_game_dxvk_conf;
+        rows[SET_GAME_DXVK_CONF].help = "默认开启，DXVK 读取 EXE 同目录的 dxvk.conf，追加在启动器生成的配置之后。同 EXE 的 dxvk-use-game-conf=0/1 可覆盖此默认值；关闭不撤销已加载到运行中游戏的配置。";
         snprintf( rows[SET_CREDITS].label, sizeof(rows[0].label), "Credits" );
         snprintf( rows[SET_CREDITS].value, sizeof(rows[0].value), "Wine, Box64, DXVK, Mesa..." );
         rows[SET_CREDITS].help = "The projects and platform references used by Autorun.";
@@ -3452,6 +3613,11 @@ static void settings_menu( struct launcher *l )
             if (action == UI_ACTION_CHOOSE) make_forwarder( l, 39 );
             break;
 
+        case SET_OSK: l->options->osk_enabled = !l->options->osk_enabled; break;
+        case SET_SD_CACHE: l->options->sd_cache_cn = !l->options->sd_cache_cn; break;
+        case SET_GAME_DXVK_CONF: l->options->read_game_dxvk_conf = !l->options->read_game_dxvk_conf; break;
+        case SET_COMPONENTS: l->options->components_auto = !l->options->components_auto; break;
+        case SET_SWKBD: l->options->swkbd_auto = !l->options->swkbd_auto; break;
         case SET_CREDITS:
             credits_screen( l );
             ui_start_screen( ui );
@@ -3757,6 +3923,26 @@ static int file_browser_pick( struct launcher *l, char *target, size_t size )
             }
         }
     }
+}
+
+/* A program started from the file browser and left out of the library: a
+ * setup, a patch, a tool. It runs with the settings a new game would have,
+ * or its own if it already has a file of them. */
+static int run_once( struct launcher *l, char *target, size_t size )
+{
+    struct program program;
+    char path[512];
+    int index;
+
+    if (!file_browser_pick( l, path, sizeof(path) )) return 0;
+    launcher_log( "[LAUNCHER] Run once: %s", path );
+    if ((index = find_program( l, path )) >= 0) return start_program( l, &l->programs[index], target, size );
+    if (!describe_program( l, &program, path ))
+    {
+        ui_message( &l->ui, "Run a program once", "Autorun cannot run this executable." );
+        return 0;
+    }
+    return start_program( l, &program, target, size );
 }
 
 static int add_game( struct launcher *l )
@@ -4097,11 +4283,16 @@ static int run_library( struct launcher *l, char *target, size_t size )
                 break;
             case UI_PLUS:
             {
-                static const char *const items[] = { "Add game", "Exit Autorun" };
-                int chosen = ui_menu( ui, "Autorun", items, 2, 0 );
+                static const char *const items[] = { "Add game", "Run a program once", "Exit Autorun" };
+                int chosen = ui_menu( ui, "Autorun", items, 3, 0 );
 
                 ui_start_screen( ui );
                 if (chosen == 1)
+                {
+                    if (run_once( l, target, size )) return 1;
+                    ui_start_screen( ui );
+                }
+                else if (chosen == 2)
                 {
                     if (ui_confirm( ui, "Exit Autorun", "Close Autorun and go back to the Homebrew Menu?",
                                     "Exit" )) return 0;

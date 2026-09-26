@@ -152,6 +152,16 @@ function(wine_nx_add_box64_core target)
     # block dirty also flushes the caches, as every other rewrite does; a
     # stale fetch would run the NOP and return into changed code unchecked.
     string(PREPEND dynablock_source "void* DynarecMapWritableAddress(void* addr);\n")
+    # Translation is not free: the passes that decide how large a block will be
+    # run before it asks the arenas for room. Once the last code memory object
+    # is full every entry into untranslated code translated it again, threw the
+    # work away and interpreted it -- the main thread of The Sims 2 spent all
+    # of its time in the translator. A block that already exists is still
+    # returned; only new ones are refused, and those are interpreted.
+    wine_nx_box64_patch(dynablock_source
+        "        return block;\n    }\n\n    #ifndef WIN32"
+        "        return block;\n    }\n    {\n        extern int wine_nx_box64_code_room(void);\n        if(!wine_nx_box64_code_room())\n            return NULL;\n    }\n\n    #ifndef WIN32"
+        "no translation without room for the block")
     # Every system call and unix call ends at a gate, which is on a page the
     # dynarec may not translate. Box64 finds that out only after taking the
     # global translator lock, twice per gate (LinkNext, then EmuRun), so every
@@ -262,6 +272,16 @@ function(wine_nx_add_box64_core target)
         "    block->actual_block = DynarecMapExecutableAddress(block->actual_block);\n    block->block = DynarecMapExecutableAddress(block->block);\n    block->jmpnext = DynarecMapExecutableAddress(block->jmpnext);\n")
 
     file(READ "${root}/src/dynarec/dynarec_native.c" native_source)
+    # Marking a block's instructions alive recursed once an instruction, and a
+    # block of MAX_INSTS wants far more stack than the 1 MB a Wine thread has;
+    # FalloutNV died there with 16 bytes of stack left. The same edges are
+    # walked from an explicit stack: an index is stacked only as it is marked,
+    # so the block's own instruction count bounds it, and FillBlock already
+    # holds the translator lock the neighbouring static arrays rely on.
+    wine_nx_box64_patch(native_source
+        "static void recurse_mark_alive(dynarec_native_t* dyn, int i)\n{\n    if(dyn->insts[i].x64.alive)\n        return;\n    dyn->insts[i].x64.alive = 1;\n    if(dyn->insts[i].x64.jmp && dyn->insts[i].x64.jmp_insts!=-1)\n        recurse_mark_alive(dyn, dyn->insts[i].x64.jmp_insts);\n    if(i<dyn->size-1 && dyn->insts[i].x64.has_next)\n        recurse_mark_alive(dyn, i+1);\n}"
+        "static int static_alive[MAX_INSTS+2];\nstatic void recurse_mark_alive(dynarec_native_t* dyn, int i)\n{\n    int top = 0;\n    if(dyn->insts[i].x64.alive)\n        return;\n    dyn->insts[i].x64.alive = 1;\n    static_alive[top++] = i;\n    while(top) {\n        i = static_alive[--top];\n        if(dyn->insts[i].x64.jmp && dyn->insts[i].x64.jmp_insts!=-1) {\n            int jmpto = dyn->insts[i].x64.jmp_insts;\n            if(!dyn->insts[jmpto].x64.alive) {\n                dyn->insts[jmpto].x64.alive = 1;\n                static_alive[top++] = jmpto;\n            }\n        }\n        if(i<dyn->size-1 && dyn->insts[i].x64.has_next && !dyn->insts[i+1].x64.alive) {\n            dyn->insts[i+1].x64.alive = 1;\n            static_alive[top++] = i+1;\n        }\n    }\n}"
+        "walk alive marks without recursion")
     wine_nx_box64_patch(native_source
         "    uint32_t prot = getProtection_fast(addr);"
         "    extern int wine_nx_box64_translate_allowed(uintptr_t);\n    if(!is32bits && !wine_nx_box64_translate_allowed(addr)) return NULL;\n    uint32_t prot = getProtection_fast(addr);"

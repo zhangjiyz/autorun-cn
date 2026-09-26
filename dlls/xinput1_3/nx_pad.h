@@ -11,6 +11,8 @@
 #ifndef __WINE_XINPUT_NX_PAD_H
 #define __WINE_XINPUT_NX_PAD_H
 
+#include "wine/nx_input_codes.h"
+
 enum nx_xinput_funcs
 {
     nx_xinput_get_state,
@@ -95,6 +97,24 @@ static inline void nx_xinput_map( unsigned long long buttons, int lx, int ly, in
     gamepad->sThumbLY = nx_xinput_axis( ly );
     gamepad->sThumbRX = nx_xinput_axis( rx );
     gamepad->sThumbRY = nx_xinput_axis( ry );
+}
+
+/* Keyboard and mouse entries keep the positional mapping. Only explicit
+ * gamepad targets override it; rebuild the face bits so multiple physical
+ * buttons targeting the same action cannot erase one another. */
+static inline void nx_xinput_remap_faces( unsigned long long buttons,
+                                         const unsigned short codes[4], XINPUT_GAMEPAD *gamepad )
+{
+    static const unsigned long long physical[] = { NX_PAD_A, NX_PAD_B, NX_PAD_X, NX_PAD_Y };
+    static const WORD defaults[] = { XINPUT_GAMEPAD_B, XINPUT_GAMEPAD_A,
+                                    XINPUT_GAMEPAD_Y, XINPUT_GAMEPAD_X };
+    unsigned int i;
+
+    gamepad->wButtons &= ~(XINPUT_GAMEPAD_A | XINPUT_GAMEPAD_B | XINPUT_GAMEPAD_X | XINPUT_GAMEPAD_Y);
+    for (i = 0; i < 4; i++)
+        if (buttons & physical[i])
+            gamepad->wButtons |= wine_nx_gamepad_code( codes[i] ) ?
+                                XINPUT_GAMEPAD_A << (codes[i] - WINE_NX_GAMEPAD_A) : defaults[i];
 }
 
 #endif /* __WINE_XINPUT_NX_PAD_H */

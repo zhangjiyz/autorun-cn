@@ -6,8 +6,8 @@
  * SDK keeps one in its fs client library). OpenTTD reads its graphics with a
  * seek and a small read per sprite, so most requests fetch data that a nearby
  * read already had. As Dolphin's SectorReader does for disc images, each file
- * keeps a few aligned chunks: a read inside one is a copy, a miss reads the
- * whole chunk in one request, and the least recently used chunk is replaced.
+ * keeps a few chunks: a read inside one is a copy, a miss reads a chunk in one
+ * request, and the least recently used chunk is replaced.
  *
  * Read-only and still-clean read/write handles may cache bytes and metadata.
  * The write wrapper invalidates every matching handle before the first real
@@ -21,10 +21,13 @@
 #include <string.h>
 #include <sys/stat.h>
 
-#define SD_CACHE_CHUNK  (128 * 1024)  /* bytes read per request on a miss */
+#define SD_CACHE_CHUNK  (128 * 1024)  /* the most a miss reads, and a line's buffer */
+#define SD_CACHE_FILL_MIN (16 * 1024) /* what a miss reads until a file is read in order */
 #define SD_CACHE_LINES  8             /* chunks kept per file */
 #define SD_CACHE_DIRECT (64 * 1024)   /* reads this large go straight to the file */
 #define SD_CACHE_BYPASS (-2)          /* sd_cache_read found no memory: read directly */
+#define SD_CACHE_POOL_MIN 256         /* 32 MB, the chunks every game gets */
+#define SD_CACHE_POOL_MAX 1536        /* 192 MB, when a game leaves that much heap free */
 
 struct sd_cache_line
 {
@@ -32,12 +35,98 @@ struct sd_cache_line
     long long start;   /* file offset of data[0], or -1 while it holds nothing */
     size_t len;        /* bytes held; less than a chunk only at the end of the file */
     unsigned int lru;  /* high bit set on use, shifted down on every miss */
+    unsigned long long used_at;  /* the pool's clock when last read */
 };
 
+/* When every chunk is in use, a file takes the one read longest ago by any
+ * file. Letting a full pool refuse new files instead left everything the
+ * first few files had taken with them for as long as they were open: The
+ * Sims 2 keeps hundreds of packages open, filled the pool in its first
+ * seconds, and read every other package from the card for the rest of the
+ * run -- about eight reads a chunk while there was room, then 149,000 card
+ * reads in five minutes. held lists the lines holding a chunk.
+ *
+ * max is how many chunks the pool may hold, and the runtime moves it with the
+ * heap the game leaves free (sd_cache.c): 32 MB is little next to a collection
+ * whose packages are read all run long, and The Sims 2 plays with about a
+ * gigabyte of the heap untouched. cap is what held can list, so max can grow
+ * without the list moving. */
 struct sd_cache_pool
 {
-    unsigned int used, max;  /* chunks allocated for all files, and the limit */
+    unsigned int used, max;        /* chunks allocated for all files, and the limit */
+    unsigned int cap;              /* how many held can list; max never passes it */
+    unsigned int fill_min;         /* the smallest fill, or 0 for whole chunks */
+    unsigned long long clock;      /* counts every chunk read, across files */
+    struct sd_cache_line **held;   /* the lines holding a chunk, used of them */
 };
+
+static inline void sd_cache_held_add( struct sd_cache_pool *pool, struct sd_cache_line *line )
+{
+    pool->held[pool->used++] = line;
+}
+
+static inline void sd_cache_held_remove( struct sd_cache_pool *pool, struct sd_cache_line *line )
+{
+    unsigned int i;
+
+    for (i = 0; i < pool->used; i++)
+    {
+        if (pool->held[i] != line) continue;
+        pool->held[i] = pool->held[--pool->used];
+        break;
+    }
+    if (!pool->used)
+    {
+        free( pool->held );
+        pool->held = NULL;
+    }
+}
+
+/* A chunk changes hands without the count changing: removing it first would
+ * free the list when it held the only one. */
+static inline void sd_cache_held_replace( struct sd_cache_pool *pool, struct sd_cache_line *old,
+                                          struct sd_cache_line *line )
+{
+    unsigned int i;
+
+    for (i = 0; i < pool->used; i++)
+    {
+        if (pool->held[i] != old) continue;
+        pool->held[i] = line;
+        return;
+    }
+}
+
+/* The chunk read longest ago, by any file. */
+static inline struct sd_cache_line *sd_cache_oldest( struct sd_cache_pool *pool )
+{
+    struct sd_cache_line *oldest = NULL;
+    unsigned int i;
+
+    for (i = 0; i < pool->used; i++)
+        if (!oldest || pool->held[i]->used_at < oldest->used_at) oldest = pool->held[i];
+    return oldest;
+}
+
+/* Give chunks back, the one read longest ago first, until the pool holds no
+ * more than max. The runtime lowers max as the game's own allocations take
+ * the heap: a cache that kept its chunks would be taking memory from the
+ * program it is there to speed up. */
+static inline void sd_cache_trim( struct sd_cache_pool *pool )
+{
+    while (pool->used > pool->max)
+    {
+        struct sd_cache_line *old = sd_cache_oldest( pool );
+
+        if (!old) break;
+        free( old->data );
+        old->data = NULL;
+        old->start = -1;
+        old->len = 0;
+        old->lru = 0;
+        sd_cache_held_remove( pool, old );
+    }
+}
 
 struct sd_cache_file
 {
@@ -49,6 +138,10 @@ struct sd_cache_file
     int stat_cacheable;
     int stat_valid;
     struct stat stat_value;
+    unsigned int window;     /* the size of the last fill, 0 before the first */
+    long long fill_end;      /* where the last fill ended: a miss there reads on in order */
+    int size_known;          /* a fill came back short: the file ends at size */
+    long long size;
     struct sd_cache_line lines[SD_CACHE_LINES];
     struct sd_cache_file *next;
 };
@@ -65,9 +158,13 @@ static inline void sd_cache_drop( struct sd_cache_file *file, struct sd_cache_po
     {
         if (!file->lines[i].data) continue;
         free( file->lines[i].data );
-        pool->used--;
+        sd_cache_held_remove( pool, &file->lines[i] );
         memset( &file->lines[i], 0, sizeof(file->lines[i]) );
     }
+    /* A write may have moved the end, and the order reads come in. */
+    file->window = 0;
+    file->fill_end = 0;
+    file->size_known = 0;
 }
 
 /* The same read-only lifetime and writer/rename/truncate invalidation as data.
@@ -110,18 +207,33 @@ static inline struct sd_cache_line *sd_cache_line_for( struct sd_cache_file *fil
     return NULL;
 }
 
-/* A short chunk at chunk_start marks the end of the file. */
-static inline int sd_cache_known_end( const struct sd_cache_file *file, long long chunk_start )
+/* Where the next fill starts and how much it reads, for a miss at offset. It
+ * starts at a fill_min boundary, so small reads next to one another share it,
+ * and stops short of a line that already holds what follows. Returns 0 at or
+ * past a known end of the file. */
+static inline int sd_cache_plan( const struct sd_cache_file *file, const struct sd_cache_pool *pool,
+                                 long long offset, long long *start, size_t *size, unsigned int *window )
 {
-    unsigned int i;
+    unsigned int step = pool->fill_min ? pool->fill_min : SD_CACHE_CHUNK, i;
+    long long end;
 
+    if (file->size_known && offset >= file->size) return 0;
+    if (!pool->fill_min) *window = SD_CACHE_CHUNK;
+    else if (file->window && offset == file->fill_end)  /* read on in order */
+        *window = file->window * 2 > SD_CACHE_CHUNK ? SD_CACHE_CHUNK : file->window * 2;
+    else *window = pool->fill_min;
+    *start = offset - offset % step;
+    end = *start + *window;
+    if (end - offset < 1) end = offset + 1;
     for (i = 0; i < SD_CACHE_LINES; i++)
     {
         const struct sd_cache_line *line = &file->lines[i];
 
-        if (line->data && line->start == chunk_start && line->len < SD_CACHE_CHUNK) return 1;
+        if (line->data && line->start > offset && line->start < end) end = line->start;
     }
-    return 0;
+    if (file->size_known && end > file->size) end = file->size;
+    *size = (size_t)(end - *start);
+    return 1;
 }
 
 /* The line to fill: a buffer holding nothing, then a free slot, then the
@@ -165,25 +277,51 @@ static inline long long sd_cache_read( struct sd_cache_file *file, struct sd_cac
 
         if (!line)
         {
-            long long start = at - at % SD_CACHE_CHUNK, got;
+            long long start, got;
+            unsigned int window;
+            size_t want;
 
-            if (sd_cache_known_end( file, start )) break;
+            if (!sd_cache_plan( file, pool, at, &start, &want, &window )) break;
             line = sd_cache_victim( file );
-            if (!line->data)
+            if (!line->data && pool->used >= pool->max)
             {
-                if (pool->used >= pool->max || !(line->data = malloc( SD_CACHE_CHUNK )))
+                /* Full: take the chunk read longest ago, whoever read it. */
+                struct sd_cache_line *old = sd_cache_oldest( pool );
+
+                if (!old) return done ? (long long)done : SD_CACHE_BYPASS;
+                line->data = old->data;
+                old->data = NULL;
+                old->start = -1;
+                old->len = 0;
+                old->lru = 0;
+                sd_cache_held_replace( pool, old, line );
+            }
+            else if (!line->data)
+            {
+                if (!pool->held &&
+                    !(pool->held = calloc( pool->cap ? pool->cap : pool->max, sizeof(*pool->held) )))
                     return done ? (long long)done : SD_CACHE_BYPASS;
-                pool->used++;
+                if (!(line->data = malloc( SD_CACHE_CHUNK )))
+                    return done ? (long long)done : SD_CACHE_BYPASS;
+                sd_cache_held_add( pool, line );
             }
             line->start = -1;
             line->len = 0;
             (*fills)++;
-            if ((got = fill( ctx, start, line->data, SD_CACHE_CHUNK )) < 0)
+            if ((got = fill( ctx, start, line->data, want )) < 0)
                 return done ? (long long)done : -1;
             line->start = start;
             line->len = (size_t)got;
-            if (at >= start + got) break;  /* end of the file */
+            file->window = window;
+            file->fill_end = start + got;
+            if ((size_t)got < want)  /* the end of the file */
+            {
+                file->size = start + got;
+                file->size_known = 1;
+            }
+            if (at >= start + got) break;
         }
+        line->used_at = ++pool->clock;
         skip = (size_t)(at - line->start);
         count = line->len - skip;
         if (count > size - done) count = size - done;
@@ -232,6 +370,14 @@ static inline void sd_cache_forget_path( struct sd_cache_file *list, struct sd_c
         list->stat_cacheable = 0;
         sd_cache_drop( list, pool );
     }
+}
+
+/* Bytes went to this path: what every open file with it holds may be out of
+ * date, and is dropped. They stay cached, and read the card again. */
+static inline void sd_cache_written( struct sd_cache_file *list, struct sd_cache_pool *pool, const char *path )
+{
+    for (; list; list = list->next)
+        if (sd_cache_same_path( list->path, path )) sd_cache_drop( list, pool );
 }
 
 /* Record an open file. Returns NULL without memory. */

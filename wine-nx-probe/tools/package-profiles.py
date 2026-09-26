@@ -13,7 +13,7 @@ from zipfile import ZipFile, ZipInfo, ZIP_DEFLATED
 PROBE = Path(__file__).resolve().parents[1]
 SETTINGS = set('title d3d d3d9 own-controls controller verbose profile window-fit sdl-audio sd-stat-cache sd-clean-writer-cache locale wined3d-renderer wined3d-frontbuffer-swap wined3d-explicit-buffer-flush wined3d-csmt pal3-black-overlay-skip pal3-movie-center '
                'aspect-fit touch-coordinates left-stick-run left-stick-eight-way left-stick-aim left-stick-move '
-               'windows dxvk-version vkd3d-version dxvk-hud frame-limit vsync'.split())
+               'windows dxvk-version vkd3d-version dxvk-hud frame-limit vsync address-space'.split())
 PAL3_RAW_FILES = {
     'PAL3patch.conf': (65536, '23e43567964ff76984dee7e52b4fca6cb7c4840455cd412dafe26a42cdd98b24'),
     'PAL3patch.dll': (2 * 1024 * 1024, '242ae1786f99e8c61bf6c8449d91ab5f30e5f81e4d602cdadb8388e26c46c385'),
@@ -305,6 +305,9 @@ def build(catalog_path, output, selected=None):
                     if not line or line.startswith(('#', ';')):
                         continue
                     key, value = (part.strip().lower() for part in line.split('=', 1))
+                    if value in ('0x200', '0x201', '0x202', '0x203', '512', '513', '514', '515'):
+                        if entry['min_api'] < 14 or key not in {'a', 'b', 'x', 'y'}:
+                            raise ValueError('gamepad face mappings require API 14 and an A/B/X/Y source button')
                     if value.startswith('click:'):
                         match = re.fullmatch(r'click:(\d+),(\d+)(?:,[12])?', value)
                         required_api = 10

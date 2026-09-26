@@ -107,7 +107,7 @@ dist/local-ci/时间戳-随机后缀/
 # 使用固定测试标签；主程序和适配包都从该标签更新
 ./local-ci.sh all --build-type Debug --profile-tag profile-test-001
 
-# 不填写网络更新源；离线使用需另外拷贝所需游戏 ZIP
+# 不填写网络更新源；完整安装包已内置全部离线游戏适配 ZIP
 ./local-ci.sh all --profile-repository ''
 ```
 
@@ -122,7 +122,7 @@ Debug 构建读取 `--profile-tag` 指定的准确标签，并允许该 Release 
 `--profile-repository` 只覆盖适配包来源；主程序仍从 CNB `PalmMuse/autorun-cn` 读取。`--profile-tag` 在 Debug
 构建中同时控制主程序和适配包更新标签，Release 构建的主程序仍只使用最新正式 Release。
 空仓库参数会将主程序内的 `index-url` 留空；仍生成管理表及独立 ZIP，
-表中默认下载地址使用项目仓库。离线安装时将所需 ZIP 拷入 `switch/wine/profiles/`。
+表中默认下载地址使用项目仓库。完整安装包已将全部适配 ZIP 放入 `switch/wine/profiles/`；只更新适配包时，也可将独立 ZIP 手动放入该目录。
 在线主程序默认写入 `auto-update=1`；用户可在“设置 → 系统 → 适配包管理”中
 手动更改管理表 URL、刷新管理表或关闭启动游戏前自动更新。
 已有设备需要先手动安装一次包含此修改的 Debug 主程序，之后才能通过固定测试标签更新主程序。
@@ -132,7 +132,7 @@ Debug 构建读取 `--profile-tag` 指定的准确标签，并允许该 Release 
 完整发布先上传 `autorun.zip`、表中所有游戏 ZIP，确认附件可下载后，最后上传 `autorun-profiles.tsv`；
 同时上传 `SHA256SUMS`、`BUILD.json`。
 `RELEASE.md` 可粘贴为说明。`autorun.zip` 含 NRO、配套 Wine DLL、32/64 位 DXVK、
-64 位 VKD3D、许可证及管理表，不携带游戏本体或所有游戏适配 ZIP。
+64 位 VKD3D、许可证、管理表及全部离线游戏适配 ZIP，不携带游戏本体。
 
 测试打包时保持 `profiles/catalog.json` 中各条目的 `version` 不变；每次 CI 都会生成独立产物目录。
 只有维护者明确要求加版本号时，才手动递增对应条目的 `version`。

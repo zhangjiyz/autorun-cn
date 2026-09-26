@@ -1,4 +1,5 @@
 title=仙剑奇侠传三外传·问情篇
+address-space=32-bit
 d3d=wine
 own-controls=1
 controller=keyboard

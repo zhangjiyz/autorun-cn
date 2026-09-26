@@ -50,7 +50,7 @@ int game_profile_cover_path( const char *settings, char *out, size_t size )
 void launcher_profiles_open( struct ui *ui, const char *root, const char *exe, const char *title )
 { (void)ui; (void)root; (void)exe; (void)title; }
 enum game_profile_result launcher_profiles_recover( const char *root, const char *exe )
-{ (void)root; (void)exe; return GAME_PROFILE_OK; }
+{ (void)root; (void)exe; return getenv( "LAUNCHER_HOST_PROFILE_RECOVERY_FAIL" ) ? GAME_PROFILE_RECOVERY : GAME_PROFILE_OK; }
 const char *game_profile_error( enum game_profile_result result ) { (void)result; return "profile error"; }
 #endif
 
@@ -382,6 +382,29 @@ static unsigned int install_forwarder( int bits, const char *name, unsigned long
     return 0x4A8;
 }
 
+/* The forwarders the console has, when LAUNCHER_HOST_TITLES names them (ids in
+ * hex, any separator): without it the launcher is told nothing can be opened. */
+static const char *installed_titles;
+
+static int title_installed( unsigned long long id )
+{
+    char text[20];
+
+    snprintf( text, sizeof(text), "%016llX", id );
+    return installed_titles && strstr( installed_titles, text );
+}
+
+static int launch_title( unsigned long long id )
+{
+    printf( "launch_title %016llX\n", id );
+    return 1;
+}
+
+static unsigned long long forwarder_id( int bits )
+{
+    return bits == 32 ? 0x0500000000032000ull : 0x0500000000039000ull;
+}
+
 int main( int argc, char **argv )
 {
     struct wine_nx_launcher_options options = { .runtime_dir = "sdmc:/switch/wine", .build = "nx-host-test",
@@ -409,6 +432,12 @@ int main( int argc, char **argv )
     if (argc > 3 && !strcmp( argv[3], "--carousel-fixture" )) carousel_fixture();
     else if (argc > 3) snprintf( target, sizeof(target), "%s", argv[3] );
 
+    if ((installed_titles = getenv( "LAUNCHER_HOST_TITLES" )))
+    {
+        options.launch_title = launch_title;
+        options.title_installed = title_installed;
+        options.forwarder_id = forwarder_id;
+    }
     ui_present_hook = on_frame;
     chosen = wine_nx_launcher_run( &options, target, sizeof(target) );
     printf( "launcher returned %d target '%s' verbose %d profile %d framebuffer %d after %d frames\n",

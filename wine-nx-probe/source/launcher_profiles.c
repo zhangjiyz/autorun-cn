@@ -270,6 +270,7 @@ static int choose_profile( struct ui *ui, const struct game_profile_catalog *cat
             char entered[128];
             if (launcher_platform_prompt( "筛选游戏名或关键词", query, entered, sizeof(entered) ))
                 snprintf( query, sizeof(query), "%s", entered );
+            ui_resume_after_prompt( ui );
             memset( &list, 0, sizeof(list) );
             continue;
         }

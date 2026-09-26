@@ -110,6 +110,7 @@ struct ui
 
     SDL_GameController *controller;
     int held;
+    int wait_input_release;
     Uint32 held_since, held_last;
     int stick_x, stick_y;
     struct
@@ -155,6 +156,8 @@ void ui_present( struct ui *ui );
 extern void (*ui_present_hook)( SDL_Renderer *renderer );
 void ui_wait( struct ui *ui );
 void ui_start_screen( struct ui *ui );
+/* Drop a native prompt's closing input and wait for controls to be released. */
+void ui_resume_after_prompt( struct ui *ui );
 
 void ui_fill( struct ui *ui, int x, int y, int w, int h, SDL_Color color );
 void ui_border( struct ui *ui, int x, int y, int w, int h, int thickness, SDL_Color color );

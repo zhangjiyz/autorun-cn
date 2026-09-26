@@ -298,7 +298,7 @@ static int allowed_key( const char *key, int controls )
     static const char settings[] =
         "|title|d3d|d3d9|own-controls|controller|verbose|profile|window-fit|sdl-audio|sd-stat-cache|sd-clean-writer-cache|locale|wined3d-renderer|wined3d-frontbuffer-swap|wined3d-explicit-buffer-flush|wined3d-csmt|pal3-black-overlay-skip|pal3-movie-center|"
         "aspect-fit|touch-coordinates|left-stick-run|left-stick-eight-way|left-stick-aim|left-stick-move|"
-        "windows|dxvk-version|vkd3d-version|dxvk-hud|frame-limit|vsync|";
+        "windows|dxvk-version|vkd3d-version|dxvk-hud|frame-limit|vsync|address-space|";
     static const char keys[] =
         "|LSTICK|RSTICK|DPAD|TOUCH|UP|DOWN|LEFT|RIGHT|LUP|LDOWN|LLEFT|LRIGHT|RUP|RDOWN|RLEFT|RRIGHT|"
         "A|B|X|Y|L|R|ZL|ZR|PLUS|MINUS|STICKL|STICKR|";

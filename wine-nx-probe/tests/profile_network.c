@@ -41,6 +41,7 @@ void ui_header( struct ui *ui, const char *title, const char *subtitle ) { (void
 void ui_text_centered( struct ui *ui, TTF_Font *font, int x, int y, const char *text, SDL_Color color )
 { (void)ui; (void)font; (void)x; (void)y; (void)text; (void)color; }
 void ui_present( struct ui *ui ) { (void)ui; }
+void ui_resume_after_prompt( struct ui *ui ) { (void)ui; }
 int launcher_platform_prompt( const char *header, const char *initial, char *out, size_t size )
 { (void)header; assert( !strcmp( initial, AUTORUN_PROFILE_INDEX_URL ) ); snprintf( out, size, "%s", source_url ); return 1; }
 int ui_confirm( struct ui *ui, const char *title, const char *text, const char *yes )

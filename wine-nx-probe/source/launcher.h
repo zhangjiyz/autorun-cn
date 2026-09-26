@@ -55,6 +55,9 @@ struct wine_nx_launcher_options
     /* Build a forwarder for this program and install it. bits is 32 or 39;
      * returns 0, leaving step pointing at what failed otherwise. */
     unsigned int (*install_forwarder)( int bits, const char *name, unsigned long long *id, const char **step );
+    /* The id install_forwarder gives the forwarder it makes with these bits,
+     * to find one made before the launcher kept its id. May be NULL. */
+    unsigned long long (*forwarder_id)( int bits );
     /* The global settings on entry, as the user left them on return. The
      * runtime keeps them; the launcher only says what they became. */
     int verbose;
@@ -62,6 +65,11 @@ struct wine_nx_launcher_options
     int framebuffer;
     int reopen_launcher;  /* come back here when a program ends, rather than to the menu */
     int dxvk_on_add;      /* a game added to the library starts with DXVK enabled */
+    int osk_enabled;      /* floating keyboard, including its controller shortcut */
+    int sd_cache_cn;      /* saved policy; takes effect when Autorun next starts */
+    int read_game_dxvk_conf; /* default for each executable's dxvk-use-game-conf */
+    int components_auto;  /* register Windows components before the first game */
+    int swkbd_auto;       /* the on-screen keyboard opens when a text field takes focus */
 };
 
 /* Show the launcher. Returns 1 with the chosen program's path in target, or 0
@@ -69,7 +77,7 @@ struct wine_nx_launcher_options
 int wine_nx_launcher_run( struct wine_nx_launcher_options *options, char *target, size_t target_size );
 void wine_nx_launcher_usb_changed(void);
 
-/* A line in wine-nx-runtime.log (runtime.c). */
+/* A line in autorun_runtime.log (runtime.c). */
 void wine_nx_runtime_trace( const char *msg );
 
 /* What launcher_platform_status found. */

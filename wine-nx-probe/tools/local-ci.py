@@ -219,8 +219,19 @@ def verify_runtime(path, profiles, commit, index_url=None, release_tag=None):
             raise ValueError('Runtime NRO does not contain the configured profile source')
         if archive.read(prefix + 'profiles/autorun-profiles.tsv') != profiles.read_bytes():
             raise ValueError('Bundled and separate profile indexes differ')
-        if any(name.startswith('profiles/') and name.lower().endswith('.zip') for name in actual):
-            raise ValueError('Main package should only bundle the index, not game ZIPs')
+        bundled = {name for name in actual if name.startswith('profiles/') and name.lower().endswith('.zip')}
+        if manifest['features'].get('offline_profiles') or bundled:
+            # Reuse the release verifier: require the entire indexed set, exact
+            # hashes/sizes and the same single-game content boundaries offline.
+            with tempfile.TemporaryDirectory(prefix='autorun-bundled-profiles-') as directory:
+                offline = Path(directory)
+                (offline / 'autorun-profiles.tsv').write_bytes(profiles.read_bytes())
+                for name in bundled:
+                    filename = PurePosixPath(name).name
+                    if name != 'profiles/' + filename:
+                        raise ValueError(f'Unexpected offline profile location: {name}')
+                    (offline / filename).write_bytes(archive.read(prefix + name))
+                verify_profiles(offline / 'autorun-profiles.tsv')
         if index_url is not None:
             expected = f'index-url={index_url}\nauto-update=1\nbuild-index-url={index_url}\n'.encode()
             if archive.read(prefix + 'profile-updates.txt') != expected:

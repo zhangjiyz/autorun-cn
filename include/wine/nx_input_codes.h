@@ -5,6 +5,17 @@
 #define WINE_NX_MOUSE_LEFT  0x100
 #define WINE_NX_MOUSE_RIGHT 0x101
 
+/* Native gamepad targets in the same keys.txt mapping as keyboard keys. */
+#define WINE_NX_GAMEPAD_A 0x200
+#define WINE_NX_GAMEPAD_B 0x201
+#define WINE_NX_GAMEPAD_X 0x202
+#define WINE_NX_GAMEPAD_Y 0x203
+
+static inline int wine_nx_gamepad_code( unsigned int code )
+{
+    return code >= WINE_NX_GAMEPAD_A && code <= WINE_NX_GAMEPAD_Y;
+}
+
 /* Controller mappings name the dedicated navigation keys, not the keypad.
  * The null driver's US table lists keypad aliases first, so MapVirtualKeyEx
  * can return bare 48/50/4b/4d even for VK_UP/DOWN/LEFT/RIGHT. */
