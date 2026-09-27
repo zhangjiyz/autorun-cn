@@ -17,7 +17,9 @@
  * re-protected and flushed guest memory to wine_nx_box64_invalidate, which
  * frees the blocks there or makes their next entry check the code's hash.
  * Code a program changes without such a report (self-modifying code without
- * NtFlushInstructionCache) keeps running its old translation.
+ * NtFlushInstructionCache) keeps running its old translation by default.
+ * BOX64_DYNAREC_SELFMOD opts into persistent block hash validation for those
+ * programs, trading dispatch speed for detecting their unreported code writes.
  * Runs stop at the gate pages because they are reported non-executable: the
  * dynarec leaves them to the interpreter, whose instruction hook stops there.
  */
@@ -153,6 +155,20 @@ static unsigned long long nx_now_ns(void)
 static pthread_mutex_t arena_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_once_t init_once = PTHREAD_ONCE_INIT;
 static int dynarec_ready;
+static int nx_box64_selfmod;
+static uintptr_t nx_box64_main_start, nx_box64_main_end;
+
+/* Set before guest execution. A missing range keeps mode 2 conservative: it
+ * checks all code until the runtime has identified the main image. */
+void wine_nx_box64_set_main_image( uintptr_t base, size_t size )
+{
+    nx_box64_main_start = nx_box64_main_end = 0;
+    if (base && size && size <= UINTPTR_MAX - base)
+    {
+        nx_box64_main_start = base;
+        nx_box64_main_end = base + size;
+    }
+}
 
 /* Pages the dynarec must not translate: the syscall/Unix-call gates, and a
  * test completion address. Written once per process, read lock-free. */
@@ -465,6 +481,8 @@ static int *const nx_box64_values[NX_BOX64_OPTION_COUNT] =
     [NX_BOX64_X87DOUBLE] = &box64env.dynarec_x87double,
     [NX_BOX64_PURGE] = &box64env.dynarec_purge,
     [NX_BOX64_PURGE_AGE] = &box64env.dynarec_purge_age,
+    [NX_BOX64_DYNAREC] = &box64env.dynarec,
+    [NX_BOX64_SELFMOD] = &nx_box64_selfmod,
 };
 
 /* Set by the runtime before the first run: the program's .box64.txt. */
@@ -500,6 +518,7 @@ static void apply_box64_options(void)
 
 static void init_box64_env(void)
 {
+    nx_box64_selfmod = 0;
     /* Box64's own defaults for every option, then the CPU this backend
      * presents: nothing beyond SSE2 (dlls/winebox64/cpuid.h). */
 #define INTEGER(NAME, name, default, min, max, wine, dynacache) box64env.name = default;
@@ -554,14 +573,16 @@ static void init_dynarec(void)
     pthread_mutex_init( &my_context->mutex_bridge, NULL );
     init_box64_env();
     init_jump_tables();
+    if (!box64env.dynarec)
+        return;
     pthread_mutex_lock( &arena_mutex );
     dynarec_ready = create_arena( 0 );
     pthread_mutex_unlock( &arena_mutex );
     if (!dynarec_ready) box64env.dynarec = 0;
 }
 
-/* Once per process, before the first run. Returns FALSE when no code memory
- * could be created; the engine then interprets. */
+/* Once per process, before the first run. Returns FALSE when disabled by the
+ * program's options or no code memory could be created; the engine interprets. */
 int wine_nx_box64_dynarec_init(void)
 {
     /* Every run asks; once set, dynarec_ready stays. */
@@ -1351,6 +1372,13 @@ uint32_t getProtection( uintptr_t addr )
 
     if (!(protection & PROT_EXEC)) return protection;
     for (i = 0; i < count; i++) if ((addr & ~(uintptr_t)0xfff) == stop_pages[i]) return 0;
+    /* Horizon does not trap every guest code write. Programs that unpack or
+     * rewrite code need Box64's persistent hash check at each block entry.
+     * Opt-in per program; other games retain direct block links. */
+    if (nx_box64_selfmod &&
+        (nx_box64_selfmod == 1 || !nx_box64_main_end ||
+         (addr >= nx_box64_main_start && addr < nx_box64_main_end)))
+        protection |= PROT_NEVERCLEAN;
     return protection;
 }
 

@@ -34,4 +34,6 @@ BOOL wine_nx_box64_handle_fault( ULONG_PTR address, ULONG access, ULONG_PTR pc,
 /* What the last STATUS_ACCESS_VIOLATION of this thread's run was about: the
  * address, and 0 read, 1 write or 8 execute. */
 void wine_nx_box64_last_fault( ULONG *address, ULONG *access );
+/* Optional dynarec mode 2 limits persistent hash checks to this image. */
+void wine_nx_box64_set_main_image( uintptr_t base, size_t size );
 #endif

@@ -44,7 +44,17 @@ int main(void)
         if (nx_box64_options[i].advanced) advanced_count++;
         else main_count++;
     }
-    assert( main_count == 6 && advanced_count == 12 );
+    assert( main_count == 6 && advanced_count == 14 );
+    option = nx_box64_option_find( "BOX64_DYNAREC_SELFMOD" );
+    assert( option && option->default_value == 0 );
+    assert( nx_box64_option_choice( option, 0 ) >= 0 && nx_box64_option_choice( option, 1 ) >= 0 );
+    assert( nx_box64_option_choice( option, 2 ) >= 0 );
+    assert( nx_box64_option_choice( option, 3 ) < 0 );
+    option = nx_box64_option_find( "BOX64_DYNAREC" );
+    assert( option && option->default_value == 1 );
+    assert( nx_box64_option_choice( option, 0 ) >= 0 && nx_box64_option_choice( option, 1 ) >= 0 );
+    assert( nx_box64_option_choice( option, 2 ) < 0 && nx_box64_option_choice( option, -1 ) < 0 );
+    assert( nx_box64_option_line( "BOX64_DYNAREC=0\n", name, sizeof(name), &value ) && value == 0 );
     option = nx_box64_option_find( "BOX64_DYNAREC_PURGE_AGE" );
     assert( option && nx_box64_option_choice( option, 1000 ) >= 0 && nx_box64_option_choice( option, 4096 ) < 0 );
     option = nx_box64_option_find( "BOX64_DYNAREC_FORWARD" );

@@ -28,6 +28,8 @@ enum nx_box64_option_id
     NX_BOX64_X87DOUBLE,
     NX_BOX64_PURGE,
     NX_BOX64_PURGE_AGE,
+    NX_BOX64_DYNAREC,
+    NX_BOX64_SELFMOD,
     NX_BOX64_OPTION_COUNT
 };
 
@@ -99,6 +101,12 @@ static const struct nx_box64_option nx_box64_options[NX_BOX64_OPTION_COUNT] =
     { NX_BOX64_PURGE_AGE, "BOX64_DYNAREC_PURGE_AGE",
       "How long translated code has to go unused before a purge may take it back, in 10 ms ticks.",
       1, 1000, 4, { 500, 1000, 3000, 6000 }, { "5 s", "10 s", "30 s", "60 s" } },
+    { NX_BOX64_DYNAREC, "BOX64_DYNAREC",
+      "Runs this program with dynamic compilation or the slower interpreter. Restart the program after changing it; interpreter mode is useful for diagnosing translation faults.",
+      1, 1, 2, { 0, 1 }, { "0 - Interpreter", "1 - Dynamic compilation" } },
+    { NX_BOX64_SELFMOD, "BOX64_DYNAREC_SELFMOD",
+      "Rechecks translated code before entering a block. Mode 1 checks all modules; mode 2 checks only the main program image, preserving unpacker protection with less DLL overhead. Restart after changing it.",
+      1, 0, 3, { 0, 1, 2 }, { "0 - Off", "1 - On", "2 - Main image only" } },
 };
 
 static inline const struct nx_box64_option *nx_box64_option_find( const char *name )

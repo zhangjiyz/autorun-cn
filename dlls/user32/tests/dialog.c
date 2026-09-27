@@ -2336,6 +2336,18 @@ static void test_MessageBox(char **argv)
     HHOOK hook;
     int ret;
 
+    /* Prevent creation even if an invalid owner is mistakenly accepted. */
+    hook = SetWindowsHookExA(WH_CBT, msgbox_hook_proc2, NULL, GetCurrentThreadId());
+    SetLastError(0xdeadbeef);
+    ret = MessageBoxA((HWND)1, "Text", "MSGBOX caption", MB_OKCANCEL | MB_ICONQUESTION);
+    ok(!ret, "got %d, expected 0\n", ret);
+    ok(GetLastError() == ERROR_INVALID_WINDOW_HANDLE, "got error %lu\n", GetLastError());
+    SetLastError(0xdeadbeef);
+    ret = MessageBoxW((HWND)1, L"Text", L"MSGBOX caption", MB_OKCANCEL | MB_ICONQUESTION);
+    ok(!ret, "got %d, expected 0\n", ret);
+    ok(GetLastError() == ERROR_INVALID_WINDOW_HANDLE, "got error %lu\n", GetLastError());
+    UnhookWindowsHookEx(hook);
+
     hook = SetWindowsHookExA(WH_CBT, msgbox_hook_proc, NULL, GetCurrentThreadId());
 
     for (i = 0; i < ARRAY_SIZE(tests); ++i)

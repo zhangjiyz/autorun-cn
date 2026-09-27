@@ -46,6 +46,19 @@ else()
         target_link_libraries(${amd64_target} PRIVATE "box64-core${suffix}" m pthread)
     endforeach()
     target_sources(box64-amd64-execution-dynarec PRIVATE "${probe}/source/wow64_box64_dynarec.c")
+    add_executable(box64-selfmod-execution ../box64_selfmod_execution.c
+        "${probe}/source/wow64_box64_bridge.c" "${probe}/source/wow64_box64_engine.c"
+        "${probe}/source/wow64_box64_dynarec.c")
+    target_compile_definitions(box64-selfmod-execution PRIVATE __WINESRC__ _WIN64)
+    target_include_directories(box64-selfmod-execution PRIVATE "${probe}/../include" "${probe}/source"
+        "${probe}/../dlls/ntdll/unix")
+    target_compile_options(box64-selfmod-execution PRIVATE -Wall -Wextra -Werror -ffunction-sections -fdata-sections)
+    target_link_options(box64-selfmod-execution PRIVATE -Wl,--gc-sections)
+    target_link_libraries(box64-selfmod-execution PRIVATE box64-core-dynarec m pthread)
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/selfmod-interpreter.box64.txt" "BOX64_DYNAREC=0\n")
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/selfmod-default.box64.txt" "BOX64_DYNAREC=1\nBOX64_DYNAREC_CALLRET=0\n")
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/selfmod-checked.box64.txt" "BOX64_DYNAREC=1\nBOX64_DYNAREC_CALLRET=0\nBOX64_DYNAREC_SELFMOD=1\n")
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/selfmod-main.box64.txt" "BOX64_DYNAREC=1\nBOX64_DYNAREC_CALLRET=0\nBOX64_DYNAREC_SELFMOD=2\n")
 endif()
 if(NOT CMAKE_CROSSCOMPILING)
     enable_testing()
@@ -58,5 +71,21 @@ if(NOT CMAKE_CROSSCOMPILING)
         set_tests_properties(box64-amd64-execution PROPERTIES TIMEOUT 15)
         add_test(NAME box64-amd64-execution-dynarec COMMAND box64-amd64-execution-dynarec)
         set_tests_properties(box64-amd64-execution-dynarec PROPERTIES TIMEOUT 15)
+        add_test(NAME box64-selfmod-interpreter COMMAND box64-selfmod-execution
+            "${CMAKE_CURRENT_BINARY_DIR}/selfmod-interpreter.box64.txt" 29)
+        add_test(NAME box64-selfmod-default COMMAND box64-selfmod-execution
+            "${CMAKE_CURRENT_BINARY_DIR}/selfmod-default.box64.txt" 17)
+        add_test(NAME box64-selfmod-checked COMMAND box64-selfmod-execution
+            "${CMAKE_CURRENT_BINARY_DIR}/selfmod-checked.box64.txt" 29)
+        add_test(NAME box64-selfmod-main COMMAND box64-selfmod-execution
+            "${CMAKE_CURRENT_BINARY_DIR}/selfmod-main.box64.txt" 29)
+        add_test(NAME box64-selfmod-main-outside COMMAND box64-selfmod-execution
+            "${CMAKE_CURRENT_BINARY_DIR}/selfmod-main.box64.txt" 17 outside)
+        add_test(NAME box64-selfmod-main-unregistered COMMAND box64-selfmod-execution
+            "${CMAKE_CURRENT_BINARY_DIR}/selfmod-main.box64.txt" 29 unregistered)
+        add_test(NAME box64-selfmod-all-outside COMMAND box64-selfmod-execution
+            "${CMAKE_CURRENT_BINARY_DIR}/selfmod-checked.box64.txt" 29 outside)
+        set_tests_properties(box64-selfmod-interpreter box64-selfmod-default box64-selfmod-checked PROPERTIES TIMEOUT 15)
+        set_tests_properties(box64-selfmod-main box64-selfmod-main-outside box64-selfmod-main-unregistered box64-selfmod-all-outside PROPERTIES TIMEOUT 15)
     endif()
 endif()

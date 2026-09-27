@@ -2680,8 +2680,10 @@ static NTSTATUS runtime_target_machine( const char *path, USHORT *machine )
     FILE *file = fopen( path, "rb" );
     NTSTATUS status = STATUS_INVALID_IMAGE_FORMAT;
     if (!file) return STATUS_OBJECT_NAME_NOT_FOUND;
+    /* Packed executables can overlap their PE header with the DOS header.
+     * Reject negative offsets; the exact read below rejects truncated headers. */
     if (fread( &dos, sizeof(dos), 1, file ) == 1 && dos.e_magic == IMAGE_DOS_SIGNATURE &&
-        dos.e_lfanew >= sizeof(dos) && !fseek( file, dos.e_lfanew, SEEK_SET ) &&
+        (LONG)dos.e_lfanew >= 0 && !fseek( file, dos.e_lfanew, SEEK_SET ) &&
         fread( &nt, sizeof(nt), 1, file ) == 1 && nt.signature == IMAGE_NT_SIGNATURE)
     {
         if ((nt.file.Machine == IMAGE_FILE_MACHINE_ARM64 && nt.magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC)
@@ -4584,6 +4586,10 @@ int main( int argc, char **argv )
     hold_thread_local_pages();
     if (runtime_describe_image( module, view_size, &entry ))
     {
+        extern void wine_nx_box64_set_main_image( uintptr_t, size_t ) __attribute__((weak));
+
+        if (&wine_nx_box64_set_main_image)
+            wine_nx_box64_set_main_image( (uintptr_t)module, view_size );
         params = runtime_create_process_params( target, &main_nt_name, dos_path, sizeof(dos_path) );
         if (!params)
         {

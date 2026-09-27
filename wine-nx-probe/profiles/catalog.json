@@ -101,7 +101,7 @@
       "version": 1,
       "min_api": 14,
       "keywords": "鬼泣4 惡魔獵人4 Devil May Cry 4 DMC4 DX9",
-      "description": "原版 DX9，收录当前 Switch 真机已测试可玩的配置；完整替换游戏用户目录中的 config.ini。",
+      "description": "原版 DX9，沿用已测试的游戏配置；Autorun 设为 Wine 渲染、帧缓冲显示，新设置待真机验证；完整替换游戏用户目录中的 config.ini。",
       "settings": "dmc4-dx9/DevilMayCry4_DX9.wine-nx.txt",
       "keys": "dmc4-dx9/DevilMayCry4_DX9.keys.txt",
       "cover": "dmc4-dx9/cover.png",

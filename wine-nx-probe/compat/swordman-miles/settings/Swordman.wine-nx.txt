@@ -1,0 +1,5 @@
+windows=compositor
+d3d=dxvk
+own-controls=1
+controller=keyboard
+profile=0

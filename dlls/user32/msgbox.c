@@ -523,6 +523,12 @@ INT WINAPI MessageBoxIndirectW( LPMSGBOXPARAMSW msgbox )
     UINT i;
     struct ThreadWindows threadWindows;
 
+    if (msgbox->hwndOwner && !IsWindow( msgbox->hwndOwner ))
+    {
+        SetLastError( ERROR_INVALID_WINDOW_HANDLE );
+        return 0;
+    }
+
     if (!(hRes = FindResourceExW(user32_module, (LPWSTR)RT_DIALOG, L"MSGBOX", msgbox->dwLanguageId)))
     {
         if (!msgbox->dwLanguageId ||
