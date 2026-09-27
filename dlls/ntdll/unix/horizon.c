@@ -6548,12 +6548,16 @@ static int horizon_server_handle_destroy_window( struct horizon_server_connectio
     unsigned int status = HORIZON_STATUS_INVALID_HANDLE;
 
     pthread_mutex_lock( &horizon_server_objects_mutex );
-    for (ptr = &horizon_windows; *ptr; ptr = &(*ptr)->next)
+    for (ptr = &horizon_windows; *ptr;)
     {
         struct horizon_user_window *window = *ptr;
         struct horizon_window_property *property;
 
-        if (request->handle && window->handle != request->handle) continue;
+        if (request->handle && window->handle != request->handle)
+        {
+            ptr = &window->next;
+            continue;
+        }
         *ptr = window->next;
         horizon_message_queue_drop( &horizon_posted_messages, window->tid, window->handle );
         horizon_win_timers_drop( &horizon_timers, window->tid, window->handle );

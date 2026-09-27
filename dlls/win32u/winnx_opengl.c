@@ -117,7 +117,8 @@ static void nx_drawable_flush( struct opengl_drawable *base, UINT flags )
 {
     TRACE( "drawable %s, flags %#x\n", debugstr_opengl_drawable( base ), flags );
 
-    if (flags & GL_FLUSH_INTERVAL) funcs->p_eglSwapInterval( egl->display, abs( base->interval ) );
+    if (impl_from_opengl_drawable( base )->screen && (flags & GL_FLUSH_INTERVAL))
+        funcs->p_eglSwapInterval( egl->display, abs( base->interval ) );
 }
 
 /* Frames presented and the time inside eglSwapBuffers, for [PROGRESS]. */
@@ -370,6 +371,8 @@ static BOOL nx_drawable_swap( struct opengl_drawable *base )
     unsigned long long start;
     BOOL ret;
 
+    if (!impl_from_opengl_drawable( base )->screen) return TRUE;
+
     if (!wine_nx_window_fit && impl_from_opengl_drawable( base )->screen && &wine_nx_aspect_source_width &&
         wine_nx_aspect_source_width && &wine_nx_aspect_source_height && wine_nx_aspect_source_height)
         nx_aspect_present( wine_nx_aspect_source_width, wine_nx_aspect_source_height );
@@ -388,6 +391,17 @@ static const struct opengl_drawable_funcs nx_drawable_funcs =
     .flush = nx_drawable_flush,
     .swap = nx_drawable_swap,
 };
+
+/* WineD3D probes capabilities in this private window while a DirectDraw
+ * device can already own the NWindow with a different pixel format. Its
+ * context needs a drawable, but must not acquire the physical screen. */
+static BOOL nx_is_caps_window( HWND hwnd )
+{
+    WCHAR buffer[32];
+    UNICODE_STRING name = {0, sizeof(buffer), buffer};
+
+    return NtUserGetClassName( hwnd, FALSE, &name ) && !wcscmp( buffer, u"WineD3D_OpenGL" );
+}
 
 /* A window surface covers the whole screen: the Switch has one NWindow, and
  * window surfaces and EGL cannot share it. Programs drawing with OpenGL are
@@ -419,6 +433,28 @@ static BOOL nx_surface_create( HWND hwnd, BOOL raw, int format, struct opengl_dr
     gl->base.buffer_map[GL_FRONT - GL_FRONT_LEFT] = GL_BACK;
     gl->base.buffer_map[GL_FRONT_AND_BACK - GL_FRONT_LEFT] = GL_BACK;
 
+    if (nx_is_caps_window( hwnd ))
+    {
+        const EGLint attribs[] = {EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE};
+
+        if (!(gl->base.surface = funcs->p_eglCreatePbufferSurface( egl->display, nx_config_for_format( format ),
+                                                                attribs )))
+        {
+            nx_log( "[NXGL] caps pbuffer failed hwnd=%p format=%d egl_error=%#x",
+                    hwnd, format, funcs->p_eglGetError() );
+            goto err;
+        }
+        /* EGL pbuffers have a single color buffer. Both WGL buffers map to it. */
+        gl->base.buffer_map[0] = gl->base.buffer_map[2] = GL_FRONT_LEFT;
+        gl->base.buffer_map[1] = gl->base.buffer_map[3] = GL_NONE;
+        gl->base.buffer_map[GL_FRONT - GL_FRONT_LEFT] = GL_FRONT_LEFT;
+        gl->base.buffer_map[GL_BACK - GL_FRONT_LEFT] = GL_FRONT_LEFT;
+        gl->base.buffer_map[GL_FRONT_AND_BACK - GL_FRONT_LEFT] = GL_FRONT_LEFT;
+        nx_log( "[NXGL] caps pbuffer created hwnd=%p format=%d", hwnd, format );
+        *drawable = &gl->base;
+        return TRUE;
+    }
+
     pthread_mutex_lock( &nx_screen_mutex );
     if (nx_screen_surface && nx_screen_format == format)
     {
@@ -433,6 +469,8 @@ static BOOL nx_surface_create( HWND hwnd, BOOL raw, int format, struct opengl_dr
     }
     if (nx_screen_surface)
     {
+        nx_log( "[NXGL] surface rejected hwnd=%p requested_format=%d screen_format=%d refs=%u",
+                hwnd, format, nx_screen_format, nx_screen_refs );
         pthread_mutex_unlock( &nx_screen_mutex );
         ERR( "hwnd %p: the screen has a format %d surface, cannot serve format %d\n",
              hwnd, nx_screen_format, format );
@@ -442,6 +480,7 @@ static BOOL nx_surface_create( HWND hwnd, BOOL raw, int format, struct opengl_dr
 
     if (!(window = wine_nx_gl_acquire_window()))
     {
+        nx_log( "[NXGL] surface rejected hwnd=%p format=%d: screen acquisition failed", hwnd, format );
         ERR( "hwnd %p: the screen already has an OpenGL surface\n", hwnd );
         goto err;
     }
@@ -449,7 +488,9 @@ static BOOL nx_surface_create( HWND hwnd, BOOL raw, int format, struct opengl_dr
     if (!(gl->base.surface = funcs->p_eglCreateWindowSurface( egl->display, nx_config_for_format( format ),
                                                               (EGLNativeWindowType)window, NULL )))
     {
-        ERR( "hwnd %p: eglCreateWindowSurface failed, error %#x\n", hwnd, funcs->p_eglGetError() );
+        EGLint error = funcs->p_eglGetError();
+        nx_log( "[NXGL] surface creation failed hwnd=%p format=%d egl_error=%#x", hwnd, format, error );
+        ERR( "hwnd %p: eglCreateWindowSurface failed, error %#x\n", hwnd, error );
         /* nothing is sharing the screen yet, so give it back here */
         gl->screen = FALSE;
         wine_nx_gl_release_window();
@@ -489,6 +530,7 @@ err:
 static BOOL nx_context_create( int format, void *share, const int *attribs, void **context )
 {
     EGLint egl_attribs[16], *end = egl_attribs, error;
+    int major = 1, minor = 0, profile = 0;
 
     TRACE( "format %d, share %p, attribs %p\n", format, share, attribs );
 
@@ -499,15 +541,18 @@ static BOOL nx_context_create( int format, void *share, const int *attribs, void
         switch (attribs[0])
         {
         case WGL_CONTEXT_MAJOR_VERSION_ARB:
+            major = attribs[1];
             name = EGL_CONTEXT_MAJOR_VERSION_KHR;
             break;
         case WGL_CONTEXT_MINOR_VERSION_ARB:
+            minor = attribs[1];
             name = EGL_CONTEXT_MINOR_VERSION_KHR;
             break;
         case WGL_CONTEXT_FLAGS_ARB:
             name = EGL_CONTEXT_FLAGS_KHR;
             break;
         case WGL_CONTEXT_PROFILE_MASK_ARB:
+            profile = attribs[1];
             if (attribs[1] & WGL_CONTEXT_ES2_PROFILE_BIT_EXT)
             {
                 ERR( "OpenGL ES contexts are not supported\n" );
@@ -540,11 +585,26 @@ static BOOL nx_context_create( int format, void *share, const int *attribs, void
                                           end != egl_attribs ? egl_attribs : NULL );
     if ((error = funcs->p_eglGetError()) != EGL_SUCCESS || !*context)
     {
+        nx_log( "[NXGL] context creation failed format=%d version=%d.%d profile=%#x share=%p context=%p egl_error=%#x",
+                format, major, minor, profile, share, *context, error );
         ERR( "context creation failed for format %d, share %p, error %#x\n", format, share, error );
         return FALSE;
     }
     TRACE( "created context %p\n", *context );
+    nx_log( "[NXGL] context created format=%d version=%d.%d profile=%#x share=%p context=%p",
+            format, major, minor, profile, share, *context );
     return TRUE;
+}
+
+static BOOL nx_make_current( struct opengl_drawable *draw, struct opengl_drawable *read, void *context )
+{
+    BOOL ret = funcs->p_eglMakeCurrent( egl->display, context ? draw->surface : EGL_NO_SURFACE,
+                                      context ? read->surface : EGL_NO_SURFACE, context );
+
+    if (!ret)
+        nx_log( "[NXGL] make-current failed context=%p draw_format=%d read_format=%d egl_error=%#x",
+                context, draw ? draw->format : 0, read ? read->format : 0, funcs->p_eglGetError() );
+    return ret;
 }
 
 /* Mesa's Switch platform is the default display; its windows are NWindows. */
@@ -560,6 +620,7 @@ static struct opengl_driver_funcs nx_driver_funcs =
     .p_init_egl_platform = nx_init_egl_platform,
     .p_surface_create = nx_surface_create,
     .p_context_create = nx_context_create,
+    .p_make_current = nx_make_current,
 };
 
 UINT wine_nx_drv_OpenGLInit( UINT version, const struct opengl_funcs *opengl_funcs,
@@ -578,7 +639,6 @@ UINT wine_nx_drv_OpenGLInit( UINT version, const struct opengl_funcs *opengl_fun
     nx_driver_funcs.p_describe_pixel_format = (*driver_funcs)->p_describe_pixel_format;
     nx_driver_funcs.p_init_wgl_extensions = (*driver_funcs)->p_init_wgl_extensions;
     nx_driver_funcs.p_context_destroy = (*driver_funcs)->p_context_destroy;
-    nx_driver_funcs.p_make_current = (*driver_funcs)->p_make_current;
     nx_driver_funcs.p_pbuffer_create = (*driver_funcs)->p_pbuffer_create;
     nx_driver_funcs.p_pbuffer_updated = (*driver_funcs)->p_pbuffer_updated;
     nx_driver_funcs.p_pbuffer_bind = (*driver_funcs)->p_pbuffer_bind;

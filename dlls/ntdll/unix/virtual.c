@@ -1173,22 +1173,37 @@ NTSTATUS wine_nx_call_static_wow64_unix( unixlib_handle_t handle, ULONG code, vo
     return STATUS_INVALID_HANDLE;
 }
 
-/* The four opengl32 unix functions (enum unix_funcs codes) that took the most
- * time since the previous call, as " gl_top=code:ms/calls,...". */
+/* The four slowest and four most frequent opengl32 unix functions since the
+ * previous report, as " gl_top=code:ms/calls,... gl_hot=code:calls,...". */
 void wine_nx_gl_profile( char *buffer, size_t size )
 {
     static struct wine_nx_gl_profile_entry last[ARRAY_SIZE(wine_nx_gl_profile_entries)];
     unsigned long long top_time[4] = {0};
     unsigned int top_code[4] = {0}, top_calls[4] = {0}, i, j;
+    unsigned int hot_code[4] = {0}, hot_calls[4] = {0};
     size_t len;
 
     for (i = 0; i < ARRAY_SIZE(last); i++)
     {
-        struct wine_nx_gl_profile_entry now = wine_nx_gl_profile_entries[i];
-        unsigned long long time = now.time - last[i].time;
-        unsigned int calls = now.calls - last[i].calls;
+        struct wine_nx_gl_profile_entry now;
+        unsigned long long time;
+        unsigned int calls;
+
+        now.time = __atomic_load_n( &wine_nx_gl_profile_entries[i].time, __ATOMIC_RELAXED );
+        now.calls = __atomic_load_n( &wine_nx_gl_profile_entries[i].calls, __ATOMIC_RELAXED );
+        time = now.time - last[i].time;
+        calls = now.calls - last[i].calls;
 
         last[i] = now;
+        for (j = 0; j < 4; j++)
+        {
+            if (calls <= hot_calls[j]) continue;
+            memmove( hot_code + j + 1, hot_code + j, (3 - j) * sizeof(*hot_code) );
+            memmove( hot_calls + j + 1, hot_calls + j, (3 - j) * sizeof(*hot_calls) );
+            hot_code[j] = i;
+            hot_calls[j] = calls;
+            break;
+        }
         for (j = 0; j < 4; j++)
         {
             if (time <= top_time[j]) continue;
@@ -1205,7 +1220,12 @@ void wine_nx_gl_profile( char *buffer, size_t size )
     for (j = 0; j < 4 && top_time[j] && len < size; j++)
         len += snprintf( buffer + len, size - len, "%s%u:%llu/%u", j ? "," : "", top_code[j],
                          top_time[j] / 10000, top_calls[j] );
-    if (!top_time[0]) buffer[0] = 0;
+    if (!top_time[0]) len = 0;
+    if (hot_calls[0] && len < size)
+        len += snprintf( buffer + len, size - len, " gl_hot=" );
+    for (j = 0; j < 4 && hot_calls[j] && len < size; j++)
+        len += snprintf( buffer + len, size - len, "%s%u:%u", j ? "," : "", hot_code[j], hot_calls[j] );
+    if (!len && size) buffer[0] = 0;
 }
 
 static const char *wine_nx_module_export_name( void *module )

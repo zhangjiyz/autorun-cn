@@ -40,6 +40,7 @@
 #ifdef __SWITCH__
 #include "wine/nx_aspect_fit.h"
 extern int wine_nx_window_fit;
+extern void wine_nx_runtime_trace( const char *msg ) __attribute__((weak));
 extern int wine_nx_window_fit_update( int width, int height, int origin_x, int origin_y,
                                       struct wine_nx_aspect_rect *shown );
 #endif
@@ -2483,6 +2484,15 @@ static BOOL win32u_wglMakeContextCurrentARB( HDC draw_hdc, HDC read_hdc, struct 
         (format = get_window_pixel_format( NtUserWindowFromDC( draw_hdc ) )) <= 0)
     {
         WARN( "Invalid draw_hdc %p format %u\n", draw_hdc, format );
+#ifdef __SWITCH__
+        if (&wine_nx_runtime_trace)
+        {
+            char message[160];
+            snprintf( message, sizeof(message), "[NXGL] make-current rejected hdc=%p hwnd=%p pixel_format=%d",
+                      draw_hdc, NtUserWindowFromDC( draw_hdc ), format );
+            wine_nx_runtime_trace( message );
+        }
+#endif
         if (!format) RtlSetLastWin32Error( ERROR_INVALID_PIXEL_FORMAT );
         else RtlSetLastWin32Error( ERROR_INVALID_HANDLE );
         return FALSE;
@@ -2490,6 +2500,15 @@ static BOOL win32u_wglMakeContextCurrentARB( HDC draw_hdc, HDC read_hdc, struct 
     if (check_drawable_format_for_context() && context->format != format)
     {
         WARN( "Mismatched draw_hdc %p format %u, context %p format %u\n", draw_hdc, format, context, context->format );
+#ifdef __SWITCH__
+        if (&wine_nx_runtime_trace)
+        {
+            char message[192];
+            snprintf( message, sizeof(message), "[NXGL] make-current mismatched hdc=%p hwnd=%p dc_format=%d context_format=%d",
+                      draw_hdc, NtUserWindowFromDC( draw_hdc ), format, context->format );
+            wine_nx_runtime_trace( message );
+        }
+#endif
         RtlSetLastWin32Error( ERROR_INVALID_PIXEL_FORMAT );
         return FALSE;
     }
@@ -2961,6 +2980,15 @@ static BOOL win32u_wgl_context_reset( struct wgl_context *context, HDC hdc, stru
         (format = get_window_pixel_format( NtUserWindowFromDC( hdc ) )) <= 0)
     {
         WARN( "No pixel format.\n" );
+#ifdef __SWITCH__
+        if (&wine_nx_runtime_trace)
+        {
+            char message[160];
+            snprintf( message, sizeof(message), "[NXGL] context rejected hdc=%p hwnd=%p pixel_format=%d",
+                      hdc, NtUserWindowFromDC( hdc ), format );
+            wine_nx_runtime_trace( message );
+        }
+#endif
         if (!format) RtlSetLastWin32Error( ERROR_INVALID_PIXEL_FORMAT );
         else RtlSetLastWin32Error( ERROR_INVALID_HANDLE );
         return FALSE;

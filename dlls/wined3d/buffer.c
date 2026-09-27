@@ -56,6 +56,13 @@ static void wined3d_buffer_evict_sysmem(struct wined3d_buffer *buffer)
 
 static void buffer_invalidate_bo_range(struct wined3d_buffer *buffer, unsigned int offset, unsigned int size)
 {
+    struct wined3d_range *range;
+
+    /* Further updates cannot add anything to a fully dirty buffer. */
+    if (buffer->dirty_range_count == 1 && !buffer->dirty_ranges[0].offset
+            && buffer->dirty_ranges[0].size == buffer->resource.size)
+        return;
+
     if (!offset && (!size || size == buffer->resource.size))
         goto invalidate_all;
 
@@ -63,6 +70,21 @@ static void buffer_invalidate_bo_range(struct wined3d_buffer *buffer, unsigned i
     {
         WARN("Invalid range specified, invalidating entire buffer.\n");
         goto invalidate_all;
+    }
+
+    /* Consecutive updates often touch adjacent or overlapping bytes. Keep
+     * their exact union, without uploading any untouched gap between them. */
+    if (buffer->dirty_range_count)
+    {
+        range = &buffer->dirty_ranges[buffer->dirty_range_count - 1];
+        if (offset <= range->offset + range->size && range->offset <= offset + size)
+        {
+            unsigned int end = max(range->offset + range->size, offset + size);
+
+            range->offset = min(range->offset, offset);
+            range->size = end - range->offset;
+            return;
+        }
     }
 
     if (!wined3d_array_reserve((void **)&buffer->dirty_ranges, &buffer->dirty_ranges_capacity,
