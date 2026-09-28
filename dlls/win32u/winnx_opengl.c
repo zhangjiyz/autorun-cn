@@ -38,6 +38,7 @@ extern void *wine_nx_gl_acquire_window( void );
 extern void wine_nx_gl_release_window( void );
 extern void wine_nx_runtime_trace( const char *msg ) __attribute__((weak));
 extern int wine_nx_window_fit;
+extern int wine_nx_d7vk_offscreen_opengl;
 extern int wine_nx_aspect_source_width __attribute__((weak));
 extern int wine_nx_aspect_source_height __attribute__((weak));
 
@@ -433,14 +434,22 @@ static BOOL nx_surface_create( HWND hwnd, BOOL raw, int format, struct opengl_dr
     gl->base.buffer_map[GL_FRONT - GL_FRONT_LEFT] = GL_BACK;
     gl->base.buffer_map[GL_FRONT_AND_BACK - GL_FRONT_LEFT] = GL_BACK;
 
-    if (nx_is_caps_window( hwnd ))
+    if (nx_is_caps_window( hwnd ) || wine_nx_d7vk_offscreen_opengl)
     {
-        const EGLint attribs[] = {EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE};
+        const BOOL offscreen = wine_nx_d7vk_offscreen_opengl && !nx_is_caps_window( hwnd );
+        RECT rect = {0};
+        EGLint attribs[] = {EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE};
+
+        if (offscreen && NtUserGetClientRect( hwnd, &rect, NtUserGetDpiForWindow( hwnd ) ))
+        {
+            attribs[1] = max( 1, rect.right - rect.left );
+            attribs[3] = max( 1, rect.bottom - rect.top );
+        }
 
         if (!(gl->base.surface = funcs->p_eglCreatePbufferSurface( egl->display, nx_config_for_format( format ),
                                                                 attribs )))
         {
-            nx_log( "[NXGL] caps pbuffer failed hwnd=%p format=%d egl_error=%#x",
+            nx_log( "[NXGL] pbuffer failed hwnd=%p format=%d egl_error=%#x",
                     hwnd, format, funcs->p_eglGetError() );
             goto err;
         }
@@ -450,7 +459,8 @@ static BOOL nx_surface_create( HWND hwnd, BOOL raw, int format, struct opengl_dr
         gl->base.buffer_map[GL_FRONT - GL_FRONT_LEFT] = GL_FRONT_LEFT;
         gl->base.buffer_map[GL_BACK - GL_FRONT_LEFT] = GL_FRONT_LEFT;
         gl->base.buffer_map[GL_FRONT_AND_BACK - GL_FRONT_LEFT] = GL_FRONT_LEFT;
-        nx_log( "[NXGL] caps pbuffer created hwnd=%p format=%d", hwnd, format );
+        nx_log( "[NXGL] %s pbuffer created hwnd=%p format=%d size=%dx%d",
+                offscreen ? "D7VK offscreen OpenGL" : "caps", hwnd, format, attribs[1], attribs[3] );
         *drawable = &gl->base;
         return TRUE;
     }

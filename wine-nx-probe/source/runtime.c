@@ -488,6 +488,8 @@ static int wine_nx_gl_window;  /* an OpenGL window surface owns the screen's NWi
  * Its output is enlarged by winnx_opengl.c; touch normally uses the inverse map. */
 int wine_nx_aspect_source_width, wine_nx_aspect_source_height;
 int wine_nx_window_fit;
+/* Keep WineD3D's OpenGL surfaces off the NWindow for D3D7-to-Vulkan tests. */
+int wine_nx_d7vk_offscreen_opengl;
 static int wine_nx_window_origin_x, wine_nx_window_origin_y;
 static struct wine_nx_aspect_rect wine_nx_aspect_shown;
 /* Some games read GetCursorPos in desktop coordinates even when their image
@@ -4334,6 +4336,7 @@ int main( int argc, char **argv )
         runtime_wined3d_csmt = 1;
         runtime_pal3_black_overlay_skip = 0;
         runtime_pal3_movie_center = 0;
+        wine_nx_d7vk_offscreen_opengl = 0;
         if (target[1] != ':' &&
             launcher_program_settings_path( RUNTIME_DIR, target, settings_path, sizeof(settings_path) ) &&
             launcher_kv_load( &kv, settings_path ) && kv.size)
@@ -4342,6 +4345,9 @@ int main( int argc, char **argv )
             if (settings.verbose >= 0) wine_nx_runtime_verbose = settings.verbose;
             if (settings.profile >= 0) runtime_profile = settings.profile;
             if (settings.framebuffer >= 0) wine_nx_compositor_mode = !settings.framebuffer;
+            wine_nx_d7vk_offscreen_opengl = launcher_kv_get_int( &kv, "d7vk-offscreen-opengl", 0 ) == 1;
+            if (wine_nx_d7vk_offscreen_opengl)
+                log_line( "[NXGL] WineD3D windows use offscreen pbuffers for D7VK" );
             if (launcher_kv_get( &kv, "locale", runtime_locale, sizeof(runtime_locale) ) &&
                 strspn( runtime_locale, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.@-" ) !=
                     strlen( runtime_locale ))
