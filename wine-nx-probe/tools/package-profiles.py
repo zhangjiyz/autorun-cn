@@ -312,7 +312,7 @@ def build(catalog_path, output, selected=None):
                         match = re.fullmatch(r'click:(\d+),(\d+)(?:,[12])?', value)
                         required_api = 10
                         if (entry['min_api'] < required_api or key not in
-                            {'a', 'b', 'x', 'y', 'l', 'r', 'zl', 'zr', 'plus', 'minus', 'stickl', 'stickr'} or
+                            {'up', 'down', 'left', 'right', 'a', 'b', 'x', 'y', 'l', 'r', 'zl', 'zr', 'plus', 'minus', 'stickl', 'stickr'} or
                             not match or int(match[1]) >= 1280 or int(match[2]) >= 720):
                             raise ValueError('fixed clicks require a compatible API, a physical button, and 1280x720 coordinates')
             files[f'{ident}/{kind}.txt'] = data

@@ -40,6 +40,7 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
     assert 'pal3/config.ini' not in entries
     for name in pack.PAL3_RAW_FILES:
         assert entries[f'pal3/{name}'] == (PROBE / 'profiles/pal3' / name).read_bytes()
+    assert entries['pal3/keys.txt'] == (PROBE / 'profiles/pal3/PAL3.keys.txt').read_bytes()
     assert b'pal3-black-overlay-skip' not in entries['pal3a/settings.txt']
     assert b'pal3-movie-center' not in entries['pal3a/settings.txt']
     assert not any(name.startswith('pal3a/') and name.endswith(('.dll', '.conf')) for name in entries)
@@ -191,8 +192,7 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
         entry.pop('raw_files', None); entry.pop('disable_file', None); entry.pop('files', None); entry['min_api'] = 1
     legacy_keys = maintenance / 'pal3/PAL3.keys.txt'
     current_keys = legacy_keys.read_text()
-    legacy_keys.write_text(re.sub(r'^X=click:\d+,\d+(?:,[12])?$', 'X=0x0d', current_keys,
-                                  flags=re.MULTILINE).replace('PLUS=click:1240,40', 'PLUS=0x1b'))
+    legacy_keys.write_text(re.sub(r'click:\d+,\d+(?:,[12])?', '0x0d', current_keys))
     # The legacy fixture predates native gamepad targets in keys.txt.
     legacy_pad_keys = maintenance / 'dmc4-dx9/DevilMayCry4_DX9.keys.txt'
     current_pad_keys = legacy_pad_keys.read_text()
