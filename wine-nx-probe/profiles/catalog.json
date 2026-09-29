@@ -96,8 +96,32 @@
       "disable_file": "zhaoyunzhuan2/disable-file.json"
     },
     {
+      "id": "swordman",
+      "name": "天地劫：神魔至尊传",
+      "version": 1,
+      "min_api": 13,
+      "keywords": "天地劫 神魔至尊传 神魔至尊傳 Swordman SWORDMAN",
+      "description": "适用于已验证的 Swordman V1.3 游戏目录；沿用现有的 cnc-ddraw 和 Miles 兼容 DLL，安装运行设置、按键、Box64 参数与封面。",
+      "settings": "swordman/Swordman.wine-nx.txt",
+      "keys": "swordman/Swordman.keys.txt",
+      "cover": "swordman/cover.png",
+      "files": [{"root": "game", "path": "Swordman.box64.txt", "source": "swordman/Swordman.box64.txt"}]
+    },
+    {
+      "id": "biko3",
+      "name": "尾行3",
+      "version": 1,
+      "min_api": 16,
+      "keywords": "尾行3 尾行 Biko3 Biko_DVD 美少女游戏",
+      "description": "适用于已核对的 Biko_DVD.exe；启用单游戏图形设置、补齐 Data/catalog，并安装游戏目录 ddraw.dll。",
+      "settings": "biko3/Biko_DVD.wine-nx.txt",
+      "keys": "biko3/Biko_DVD.keys.txt",
+      "cover": "biko3/cover.png",
+      "files": [{"root": "game", "path": "ddraw.dll", "source": "biko3/ddraw.dll"}]
+    },
+    {
       "id": "dmc4-dx9",
-      "name": "鬼泣4（原版 DX9）",
+      "name": "鬼泣4",
       "version": 1,
       "min_api": 14,
       "keywords": "鬼泣4 惡魔獵人4 Devil May Cry 4 DMC4 DX9",

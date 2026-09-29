@@ -27,6 +27,19 @@ static void content( const char *path, const void *expected, size_t length )
     assert( size == length && !memcmp( data, expected, size ) );
 }
 
+static void large_content( const char *path, const unsigned char *expected, size_t length )
+{
+    FILE *file = fopen( path, "rb" ); assert( file );
+    unsigned char data[65536];
+    size_t used = 0, n;
+    while ((n = fread( data, 1, sizeof(data), file )))
+    {
+        assert( used + n <= length && !memcmp( data, expected + used, n ) );
+        used += n;
+    }
+    assert( used == length && !ferror( file ) && !fclose( file ) );
+}
+
 struct fixture { char settings[768], keys[768], game[768], user[768], nested[768], empty[768]; };
 static void fixture( struct fixture *f )
 {
@@ -91,6 +104,21 @@ int main( int argc, char **argv )
         assert( game_profile_apply( failed.settings, failed.keys, &profile, "", "", &preserved ) == GAME_PROFILE_IO );
         fail_after = 0; original( &failed );
     }
+    /* A replacement and the existing player's file may both exceed 1 MiB. */
+    const size_t large_size = 3 * 1024 * 1024;
+    unsigned char *old_large = malloc( large_size ), *new_large = malloc( large_size );
+    assert( old_large && new_large );
+    for (size_t i = 0; i < large_size; i++)
+    { old_large[i] = (unsigned char)(i * 7); new_large[i] = (unsigned char)(i * 11 + 3); }
+    struct fixture big; fixture( &big );
+    assert( durable_write( big.game, old_large, large_size ) );
+    struct game_profile large = profile;
+    large.min_api = GAME_PROFILE_API; large.files[0].data = new_large; large.files[0].size = large_size;
+    assert( game_profile_apply( big.settings, big.keys, &large, "", "", &preserved ) == GAME_PROFILE_OK );
+    large_content( big.game, new_large, large_size );
+    assert( game_profile_restore( big.settings, big.keys ) == GAME_PROFILE_OK );
+    large_content( big.game, old_large, large_size );
+    free( old_large ); free( new_large );
     /* An alias via another root, state target or a symlink must never overwrite it. */
     struct game_profile invalid = profile;
     strcpy( invalid.files[1].root, "drive_c" ); strcpy( invalid.files[1].path, "Game/config.ini" );

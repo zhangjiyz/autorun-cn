@@ -1,5 +1,5 @@
 d3d=wine
-title=鬼泣4（原版 DX9）
+title=鬼泣4
 address-space=32-bit
 windows=framebuffer
 own-controls=1

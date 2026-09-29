@@ -9,9 +9,10 @@ unmodified upstream release.
 
 AutoRunNX changes relative to that commit:
 
-- `src/ddraw/d3d7/d3d7_device.cpp`: exact-build Biko_DVD.exe hooks for an
+- `src/ddraw/d3d7/d3d7_device.cpp`: opt-in hooks for the verified Biko3 code layout, with an
   opaque sort plan cache, conservative far-wall skip, and discarded triangle
-  visibility block skip. The game executable is checked before patching and
+  visibility block skip. `WINE_NX_D7VK_BIKO3_PATCHES=1` enables them; image
+  base and original instructions are checked before patching. The executable
   stays unchanged on disk.
 - `src/util/log/log.h`: use Wine's i386 `__cdecl` calling convention for
   `__wine_dbg_output`.

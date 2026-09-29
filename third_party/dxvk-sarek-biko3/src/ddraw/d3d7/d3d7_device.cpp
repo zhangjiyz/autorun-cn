@@ -12,7 +12,7 @@
 
 namespace dxvk {
 
-  // Exact Biko_DVD.exe hooks. The on-disk game executable is untouched.
+  // Opt-in hooks for the verified Biko3 code layout. The executable is untouched on disk.
   static bool bikoSortInstalled = false;
   static bool bikoVisibilityBlockInstalled = false;
   static void* bikoBoundaryTrampoline = nullptr;
@@ -242,13 +242,16 @@ namespace dxvk {
 
   static void BikoInstallSortCache() {
     if (bikoSortInstalled) return;
-    char path[MAX_PATH] = {};
-    HMODULE exe = GetModuleHandleA(nullptr);
-    if (reinterpret_cast<uintptr_t>(exe) != 0x400000u ||
-        !GetModuleFileNameA(exe, path, MAX_PATH)) return;
-    const char* basename = std::strrchr(path, '\\');
-    basename = basename ? basename + 1 : path;
-    if (_stricmp(basename, "Biko_DVD.exe")) return;
+    char enabled[2] = {};
+    if (GetEnvironmentVariableA("WINE_NX_D7VK_BIKO3_PATCHES", enabled, sizeof(enabled)) != 1 ||
+        enabled[0] != '1') return;
+    auto* exe = reinterpret_cast<const IMAGE_DOS_HEADER*>(GetModuleHandleA(nullptr));
+    if (reinterpret_cast<uintptr_t>(exe) != 0x400000u || exe->e_magic != IMAGE_DOS_SIGNATURE ||
+        exe->e_lfanew < 0 || exe->e_lfanew > 0x1000) return;
+    auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS32*>(
+      reinterpret_cast<const uint8_t*>(exe) + exe->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE || nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC ||
+        nt->OptionalHeader.SizeOfImage != 0x975000u) return;
 
     auto* site = reinterpret_cast<uint8_t*>(0x42aacdu);
     const uint8_t original[10] = { 0xe8, 0xeb, 0x06, 0x00, 0x00,

@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 from zipfile import ZipFile, ZipInfo, ZIP_DEFLATED
 
 PROBE = Path(__file__).resolve().parents[1]
-SETTINGS = set('title d3d d3d9 own-controls controller verbose profile window-fit sdl-audio sd-stat-cache sd-clean-writer-cache locale wined3d-renderer wined3d-frontbuffer-swap wined3d-explicit-buffer-flush wined3d-csmt pal3-black-overlay-skip pal3-movie-center '
+SETTINGS = set('title d3d d3d9 own-controls controller verbose profile window-fit sdl-audio sd-stat-cache sd-clean-writer-cache locale wined3d-renderer wined3d-frontbuffer-swap wined3d-explicit-buffer-flush wined3d-csmt pal3-black-overlay-skip pal3-movie-center d7vk-offscreen-opengl d7vk-biko3-patches vulkan-fs-hack-rgba-view ensure-game-dir '
                'aspect-fit touch-coordinates left-stick-run left-stick-eight-way left-stick-aim left-stick-move '
                'windows dxvk-version vkd3d-version dxvk-hud frame-limit vsync address-space'.split())
 PAL3_RAW_FILES = {
@@ -20,7 +20,6 @@ PAL3_RAW_FILES = {
     'PAL3.dll': (65536, 'ca26da00f7081ca05b9698de55d86949fd97e92a0627e0854b291eb503fe3545'),
 }
 FILE_MAX = 8
-FILE_SIZE_MAX = 1024 * 1024
 
 
 def replacement_path(root, path):
@@ -46,8 +45,6 @@ def replacement_files(root, items):
             raise ValueError('duplicate file replacement destination')
         seen.add(key)
         data = resource(root, item['source'])
-        if len(data) > FILE_SIZE_MAX:
-            raise ValueError('replacement file exceeds 1 MiB')
         entries.append((base, path, data, hashlib.sha256(data).hexdigest()))
     return entries
 
@@ -90,7 +87,7 @@ def raw_pal3_file(root, relative, name):
     return data
 
 
-def defaults(root, relative, allowed):
+def defaults(root, relative, allowed, min_api=0):
     data = resource(root, relative)
     if len(data) >= 8192 or b'\0' in data:
         raise ValueError(f'configuration too large or contains NUL: {relative}')
@@ -108,6 +105,10 @@ def defaults(root, relative, allowed):
             raise ValueError(f'invalid or duplicate setting in {relative}: {line}')
         if any(ord(c) < 32 for c in value):
             raise ValueError(f'control character in {relative}')
+        if key == 'ensure-game-dir':
+            if min_api < 15:
+                raise ValueError('ensure-game-dir requires profile API 15')
+            replacement_path('game', value)
         found.add(key)
     return data
 
@@ -275,6 +276,8 @@ def build(catalog_path, output, selected=None):
         replacements = replacement_files(catalog_path.parent, entry['files']) if 'files' in entry else []
         if replacements and entry['min_api'] < 13:
             raise ValueError('file replacements require min_api >= 13')
+        if any(len(content) > 1024 * 1024 for _, _, content, _ in replacements) and entry['min_api'] < 16:
+            raise ValueError('large file replacements require min_api >= 16')
         if wire_schema == 5:
             columns.append(str(len(replacements)))
         if replacements:
@@ -298,7 +301,8 @@ def build(catalog_path, output, selected=None):
             for name, relative in entry['raw_files'].items():
                 files[f'{ident}/{name}'] = raw_pal3_file(catalog_path.parent, relative, name)
         for kind in ('settings', 'keys'):
-            data = defaults(catalog_path.parent, entry[kind], KEYS if kind == 'keys' else SETTINGS)
+            data = defaults(catalog_path.parent, entry[kind], KEYS if kind == 'keys' else SETTINGS,
+                            entry['min_api'])
             if kind == 'keys':
                 for line in data.decode('utf-8').splitlines():
                     line = line.strip()
@@ -316,8 +320,6 @@ def build(catalog_path, output, selected=None):
                             not match or int(match[1]) >= 1280 or int(match[2]) >= 720):
                             raise ValueError('fixed clicks require a compatible API, a physical button, and 1280x720 coordinates')
             files[f'{ident}/{kind}.txt'] = data
-    if sum(len(data) for name, data in files.items() if '/files/' in name) > FILE_MAX * FILE_SIZE_MAX:
-        raise ValueError('total replacement files exceed 8 MiB')
     if sum(len(data) for name, data in files.items() if name.endswith('/cover.png')) > 16 * 1024 * 1024:
         raise ValueError('total covers exceed 16 MiB')
     files['catalog.tsv'] = ''.join(lines).encode('utf-8')

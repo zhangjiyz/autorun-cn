@@ -3,5 +3,6 @@
 
 void wine_nx_graphics_configure(int frame_limit, int vsync);
 void wine_nx_upscaling_configure(int mode, float sharpness);
+void wine_nx_fs_hack_rgba_view_configure(int enabled);
 
 #endif

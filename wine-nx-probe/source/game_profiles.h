@@ -4,9 +4,8 @@
 #include "launcher_settings.h"
 #include "game_cheats.h"
 
-#define GAME_PROFILE_API 14
+#define GAME_PROFILE_API 16
 #define GAME_PROFILE_FILE_MAX 8
-#define GAME_PROFILE_FILE_SIZE_MAX (1024u * 1024u)
 
 struct game_profile_file
 {

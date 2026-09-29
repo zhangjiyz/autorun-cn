@@ -45,6 +45,11 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
     assert b'pal3-movie-center' not in entries['pal3a/settings.txt']
     assert not any(name.startswith('pal3a/') and name.endswith(('.dll', '.conf')) for name in entries)
     assert b'click:' not in entries['pal3a/keys.txt']
+    assert b'ensure-game-dir=Data/catalog\n' in entries['biko3/settings.txt']
+    assert entries['biko3/keys.txt'] == (PROBE / 'profiles/biko3/Biko_DVD.keys.txt').read_bytes()
+    assert entries['biko3/cover.png'] == (PROBE / 'profiles/biko3/cover.png').read_bytes()
+    assert entries['biko3/files/0.bin'] == (PROBE / 'profiles/biko3/ddraw.dll').read_bytes()
+    assert len(entries['biko3/files/0.bin']) > 1024 * 1024
     assert entries['pal3a/cover.png'] == (PROBE / 'profiles/pal3a/cover.png').read_bytes()
     disable_digests = {
         'newpalxp': 'b59b7398193aef23c6e2b2edd0a0a25d78b8d3e2df54ae5562bc1e63a0cad4a5',
@@ -92,7 +97,8 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
                     lambda d: next(p for p in d['profiles'] if p['id'] == 'pal3').update(min_api=9),
                     lambda d: next(p for p in d['profiles'] if p['id'] == 'zhaoyunzhuan').update(min_api=11),
                     lambda d: next(p for p in d['profiles'] if p['id'] == 'newpalxp').update(min_api=11),
-                    lambda d: next(p for p in d['profiles'] if p['id'] == 'dmc4-dx9').update(min_api=13)):
+                    lambda d: next(p for p in d['profiles'] if p['id'] == 'dmc4-dx9').update(min_api=13),
+                    lambda d: next(p for p in d['profiles'] if p['id'] == 'biko3').update(min_api=15)):
         broken = json.loads(json.dumps(data)); mutator(broken)
         fixture = maintenance / 'catalog.json'; fixture.write_text(json.dumps(broken))
         try:
@@ -101,11 +107,27 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
             pass
         else:
             raise AssertionError('invalid mapping accepted')
+    biko_settings = maintenance / 'biko3/Biko_DVD.wine-nx.txt'
+    original_settings = biko_settings.read_text()
+    (maintenance / 'catalog.json').write_text(json.dumps(data))
+    for unsafe in ('../escape', '/absolute', 'C:/absolute', 'Data//catalog', 'Data/./catalog',
+                   'Data/catalog/..', 'Data\\catalog'):
+        biko_settings.write_text(original_settings.replace('Data/catalog', unsafe))
+        try:
+            pack.build(maintenance / 'catalog.json', root / 'bad-directory-output.zip')
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f'unsafe game directory accepted: {unsafe}')
+    biko_settings.write_text(original_settings)
 
     common = [os.environ.get('CC', 'cc'), '-std=gnu11', '-Wall', '-Wextra', '-Werror',
               '-O1', '-g', '-fsanitize=undefined', '-fno-omit-frame-pointer', '-I' + str(PROBE / 'source')]
     if 'clang' not in subprocess.check_output([common[0], '--version'], text=True).lower():
         common.append('-Wno-format-truncation')
+    directory_test = root / 'game-directories'
+    run(*common, PROBE / 'tests/game_directories.c', PROBE / 'source/game_directories.c', '-o', directory_test)
+    run(directory_test)
 
     # Generic replacements use both game-relative and C:-relative destinations.
     files_entry = json.loads(json.dumps(data['profiles'][0]))
@@ -187,6 +209,7 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
     run(core, valid, *bad)
     # v21 packages remain readable by the new runtime.
     legacy = json.loads(json.dumps(data)); legacy['schema'] = 1
+    legacy['profiles'] = [entry for entry in legacy['profiles'] if entry['id'] != 'biko3']
     for entry in legacy['profiles']:
         entry.pop('cheats', None); entry.pop('cover', None); entry.pop('binary_patch', None)
         entry.pop('raw_files', None); entry.pop('disable_file', None); entry.pop('files', None); entry['min_api'] = 1

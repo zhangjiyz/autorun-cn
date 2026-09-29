@@ -60,6 +60,12 @@ static pthread_mutex_t present_lock = PTHREAD_MUTEX_INITIALIZER;
  * them (wine_nx_upscaling_configure). */
 static int nx_upscaling_mode;
 static float nx_upscaling_sharpness = 0.4f;
+/* Keep the existing non-Switch behavior; the Switch runtime opts in per game. */
+#ifdef __SWITCH__
+static int nx_fs_hack_rgba_view;
+#else
+static int nx_fs_hack_rgba_view = 1;
+#endif
 
 #if defined(__SWITCH__) && defined(WINE_NX_MESA_SWITCH)
 /* mesa-switch's loaderless NVK (build-mesa-switch.sh) is linked into the Switch
@@ -80,6 +86,11 @@ void wine_nx_upscaling_configure( int mode, float sharpness )
 {
     nx_upscaling_mode = mode;
     nx_upscaling_sharpness = sharpness;
+}
+
+void wine_nx_fs_hack_rgba_view_configure( int enabled )
+{
+    nx_fs_hack_rgba_view = !!enabled;
 }
 
 static void nx_pace_present( uint64_t *previous )
@@ -2693,6 +2704,9 @@ static VkResult init_fs_hack_images( struct vulkan_device *device, struct swapch
 {
     struct vulkan_physical_device *physical_device = device->physical_device;
     struct vulkan_instance *instance = physical_device->instance;
+    const BOOL rgba_view = nx_fs_hack_rgba_view &&
+                           (createinfo->imageFormat == VK_FORMAT_R8G8B8A8_UNORM ||
+                            createinfo->imageFormat == VK_FORMAT_R8G8B8A8_SRGB);
     VkResult res;
     VkImage *real_images = NULL;
     VkDeviceSize userMemTotal = 0, offs;
@@ -2858,11 +2872,9 @@ static VkResult init_fs_hack_images( struct vulkan_device *device, struct swapch
         viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         viewInfo.image = swapchain->fs_hack_images[i].user_image;
         viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        /* The sampled view follows the game's image channel order; the
-         * compute blit writes to the separate BGRA screen view. */
-        viewInfo.format = createinfo->imageFormat == VK_FORMAT_R8G8B8A8_UNORM ||
-                          createinfo->imageFormat == VK_FORMAT_R8G8B8A8_SRGB
-                          ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_B8G8R8A8_SRGB;
+        /* Opted-in games sample in their image channel order; the compute
+         * blit writes to the separate BGRA screen view. */
+        viewInfo.format = rgba_view ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_B8G8R8A8_SRGB;
         viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         viewInfo.subresourceRange.baseMipLevel = 0;
         viewInfo.subresourceRange.levelCount = 1;
@@ -2878,9 +2890,7 @@ static VkResult init_fs_hack_images( struct vulkan_device *device, struct swapch
         if (!swapchain->fsr) continue;
 
         /* The same bytes without the sRGB decode: FSR filters perceptual values. */
-        viewInfo.format = createinfo->imageFormat == VK_FORMAT_R8G8B8A8_UNORM ||
-                          createinfo->imageFormat == VK_FORMAT_R8G8B8A8_SRGB
-                          ? VK_FORMAT_R8G8B8A8_UNORM : VK_FORMAT_B8G8R8A8_UNORM;
+        viewInfo.format = rgba_view ? VK_FORMAT_R8G8B8A8_UNORM : VK_FORMAT_B8G8R8A8_UNORM;
         if ((res = device->p_vkCreateImageView( device->host.device, &viewInfo, NULL,
                                                 &swapchain->fs_hack_images[i].gamma_view )))
         {

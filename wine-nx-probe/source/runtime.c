@@ -31,6 +31,7 @@
 #include "forwarder.h"
 #include "launcher_list.h"
 #include "launcher_settings.h"
+#include "game_directories.h"
 #include "config_json.h"
 #include "upstream_feature_defaults.h"
 #include "sd_cache.h"
@@ -445,6 +446,7 @@ static int runtime_wined3d_explicit_buffer_flush = 1;
 static int runtime_wined3d_csmt = 1;
 static int runtime_pal3_black_overlay_skip;
 static int runtime_pal3_movie_center;
+static int runtime_d7vk_biko3_patches;
 static char runtime_vkd3d_version[32];
 static char runtime_dxvk_version[32];
 static char runtime_locale[48];
@@ -1993,6 +1995,7 @@ static const char runtime_environment[] =
     "USERPROFILE=C:\\users\\steamuser\0"
     "windir=C:\\windows\0"
     "WINE_D3D_CONFIG=\0"
+    "WINE_NX_D7VK_BIKO3_PATCHES=1\0"
     "WINE_NX_PAL3_BLACK_OVERLAY_SKIP=1\0"
     "WINE_NX_PAL3_MOVIE_CENTER=1\0"
     "WINE_NX_RAW_INPUT=1\0";
@@ -2256,6 +2259,9 @@ static RTL_USER_PROCESS_PARAMETERS *runtime_create_process_params( const char *t
         const char *value = entry;
 
         if (!runtime_dxvk && !strncmp( entry, "DXVK_", 5 )) continue;
+        if (!runtime_d7vk_biko3_patches &&
+            !strncmp( entry, "WINE_NX_D7VK_BIKO3_PATCHES=", sizeof("WINE_NX_D7VK_BIKO3_PATCHES=") - 1 ))
+            continue;
         if (!runtime_pal3_black_overlay_skip &&
             !strncmp( entry, "WINE_NX_PAL3_BLACK_OVERLAY_SKIP=", sizeof("WINE_NX_PAL3_BLACK_OVERLAY_SKIP=") - 1 ))
             continue;
@@ -4323,6 +4329,7 @@ int main( int argc, char **argv )
 #ifdef WINE_NX_MESA_SWITCH
         wine_nx_graphics_configure( 0, 1 );
         wine_nx_upscaling_configure( 0, 0.4f );
+        wine_nx_fs_hack_rgba_view_configure( 0 );
 #endif
 #ifdef WINE_NX_LSFG
         wine_nx_lsfg_configure( 0, 1, 1 );
@@ -4336,16 +4343,32 @@ int main( int argc, char **argv )
         runtime_wined3d_csmt = 1;
         runtime_pal3_black_overlay_skip = 0;
         runtime_pal3_movie_center = 0;
+        runtime_d7vk_biko3_patches = 0;
         wine_nx_d7vk_offscreen_opengl = 0;
         if (target[1] != ':' &&
             launcher_program_settings_path( RUNTIME_DIR, target, settings_path, sizeof(settings_path) ) &&
             launcher_kv_load( &kv, settings_path ) && kv.size)
         {
+            char directory[1024], relative[384];
+
+            if (launcher_kv_get( &kv, "ensure-game-dir", relative, sizeof(relative) ))
+            {
+                if (!game_directory_ensure( target, relative, directory, sizeof(directory) ))
+                {
+                    log_line( "[GAME DIR] cannot ensure '%s' beside %s: %s", relative, target, strerror(errno) );
+                    return return_to_launcher();
+                }
+                log_line( "[GAME DIR] ensured %s", directory );
+            }
             launcher_settings_read( &kv, &settings );
             if (settings.verbose >= 0) wine_nx_runtime_verbose = settings.verbose;
             if (settings.profile >= 0) runtime_profile = settings.profile;
             if (settings.framebuffer >= 0) wine_nx_compositor_mode = !settings.framebuffer;
             wine_nx_d7vk_offscreen_opengl = launcher_kv_get_int( &kv, "d7vk-offscreen-opengl", 0 ) == 1;
+            runtime_d7vk_biko3_patches = launcher_kv_get_int( &kv, "d7vk-biko3-patches", 0 ) == 1;
+#ifdef WINE_NX_MESA_SWITCH
+            wine_nx_fs_hack_rgba_view_configure( launcher_kv_get_int( &kv, "vulkan-fs-hack-rgba-view", 0 ) == 1 );
+#endif
             if (launcher_kv_get( &kv, "locale", runtime_locale, sizeof(runtime_locale) ) &&
                 strspn( runtime_locale, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.@-" ) !=
                     strlen( runtime_locale ))
@@ -4459,6 +4482,8 @@ int main( int argc, char **argv )
             if (runtime_wined3d_gdi) log_line( "[WINED3D] profile renderer=gdi (2D/no3d swapchain)" );
             if (runtime_wined3d_frontbuffer_swap)
                 log_line( "[WINED3D] profile presents DirectDraw front-buffer updates through GL swaps" );
+            if (runtime_d7vk_biko3_patches)
+                log_line( "[D7VK] profile enables verified Biko3 executable patches" );
             if (!runtime_wined3d_explicit_buffer_flush)
                 log_line( "[WINED3D] profile disables explicit mapped-buffer flushes" );
             if (!runtime_wined3d_csmt)

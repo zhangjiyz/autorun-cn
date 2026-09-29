@@ -1,0 +1,9 @@
+title=尾行3
+verbose=0
+locale=ja_JP.UTF-8
+wined3d-csmt=0
+window-fit=1
+d7vk-offscreen-opengl=1
+vulkan-fs-hack-rgba-view=1
+d7vk-biko3-patches=1
+ensure-game-dir=Data/catalog

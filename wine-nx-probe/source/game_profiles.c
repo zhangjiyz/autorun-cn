@@ -296,7 +296,7 @@ static int parse_disable_file( const char *text, char digest[65] )
 static int allowed_key( const char *key, int controls )
 {
     static const char settings[] =
-        "|title|d3d|d3d9|own-controls|controller|verbose|profile|window-fit|sdl-audio|sd-stat-cache|sd-clean-writer-cache|locale|wined3d-renderer|wined3d-frontbuffer-swap|wined3d-explicit-buffer-flush|wined3d-csmt|pal3-black-overlay-skip|pal3-movie-center|"
+        "|title|d3d|d3d9|own-controls|controller|verbose|profile|window-fit|sdl-audio|sd-stat-cache|sd-clean-writer-cache|locale|wined3d-renderer|wined3d-frontbuffer-swap|wined3d-explicit-buffer-flush|wined3d-csmt|pal3-black-overlay-skip|pal3-movie-center|d7vk-offscreen-opengl|d7vk-biko3-patches|vulkan-fs-hack-rgba-view|ensure-game-dir|"
         "aspect-fit|touch-coordinates|left-stick-run|left-stick-eight-way|left-stick-aim|left-stick-move|"
         "windows|dxvk-version|vkd3d-version|dxvk-hud|frame-limit|vsync|address-space|";
     static const char keys[] =
@@ -445,7 +445,7 @@ static int parse_file_manifest( char *text, struct game_profile *p )
         struct game_profile_file *f = &p->files[i];
         unsigned int size = 0;
         if (strchr( fields[3], '\t' ) || !replacement_path( fields[0], fields[1] ) ||
-            (strcmp( fields[2], "0" ) && !positive_number( fields[2], &size )) || size > GAME_PROFILE_FILE_SIZE_MAX ||
+            (strcmp( fields[2], "0" ) && !positive_number( fields[2], &size )) ||
             strlen( fields[3] ) != 64 || strspn( fields[3], "0123456789abcdef" ) != 64) return 0;
         for (unsigned int j = 0; j < i; j++)
             if (!strcmp( fields[0], p->files[j].root ) && !strcasecmp( fields[1], p->files[j].path )) return 0;
@@ -461,7 +461,7 @@ static int read_zip_replacement( unzFile zip, struct game_profile_file *f )
     if (unzGetCurrentFileInfo64( zip, &info, NULL, 0, NULL, 0, NULL, 0 ) != UNZ_OK ||
         info.uncompressed_size != f->size || (info.flag & 1) || (info.external_fa & 0x10) ||
         (((info.external_fa >> 16) & 0170000) && ((info.external_fa >> 16) & 0170000) != 0100000)) return 0;
-    unsigned char *data = malloc( f->size + 1 ), hash[SHA256_HASH_SIZE];
+    unsigned char *data = malloc( (size_t)f->size + 1 ), hash[SHA256_HASH_SIZE];
     if (!data) return 0;
     if (unzOpenCurrentFile( zip ) != UNZ_OK) { free( data ); return 0; }
     unsigned int used = 0;
@@ -499,7 +499,7 @@ enum game_profile_result game_profiles_load( const char *archive, struct game_pr
     struct game_cheats *cheats = malloc( sizeof(*cheats) );
     enum game_profile_result result = GAME_PROFILE_INVALID;
     int index_count = 0, next, expected_count = 1;
-    unsigned long long cover_total = 0, file_total = 0;
+    unsigned long long cover_total = 0;
     game_profiles_clear( catalog );
     if (!zip || !text || !raw || !cheats) { result = GAME_PROFILE_IO; goto done; }
     if (unzGetGlobalInfo64( zip, &global ) != UNZ_OK || !global.number_entry ||
@@ -515,8 +515,6 @@ enum game_profile_result game_profiles_load( const char *archive, struct game_pr
         snprintf( manifest, sizeof(manifest), "%s/files.tsv", catalog->entries[i].id );
         if (unzLocateFile( zip, manifest, 1 ) != UNZ_OK || !read_zip_text( zip, text, CATALOG_LIMIT ) ||
             !parse_file_manifest( text, &catalog->entries[i] )) goto done;
-        for (unsigned int j = 0; j < catalog->entries[i].file_count; j++) file_total += catalog->entries[i].files[j].size;
-        if (file_total > GAME_PROFILE_FILE_MAX * GAME_PROFILE_FILE_SIZE_MAX) goto done;
     }
     if (global.number_entry != (unsigned)expected_count || unzGoToFirstFile( zip ) != UNZ_OK) goto done;
     do
@@ -611,17 +609,51 @@ struct snapshot
     unsigned char pal3patch_dll[PAL3PATCH_DLL_MAX];
     unsigned char pal3_dll[PAL3_FORWARDER_MAX];
     char file_map[LAUNCHER_KV_MAX];
-    unsigned char file_data[GAME_PROFILE_FILE_MAX][GAME_PROFILE_FILE_SIZE_MAX + 1];
+    unsigned char *file_data[GAME_PROFILE_FILE_MAX];
 };
 
 #define SNAP_DATA(s, i) ((i) == 7 ? (void *)(s)->cover : (i) == 8 ? (void *)(s)->pal3patch_config : \
                          (i) == 9 ? (void *)(s)->pal3patch_dll : (i) == 10 ? (void *)(s)->pal3_dll : \
-                         (i) == 11 ? (void *)(s)->file_map : (i) >= FILE_TARGET_START ? (void *)(s)->file_data[(i) - FILE_TARGET_START] : (void *)(s)->data[i])
+                         (i) == 11 ? (void *)(s)->file_map : (i) >= FILE_TARGET_START ? \
+                         (void *)((s)->file_data[(i) - FILE_TARGET_START] ? (s)->file_data[(i) - FILE_TARGET_START] : (unsigned char *)"") : (void *)(s)->data[i])
 
 static unsigned int snapshot_limit( unsigned int i )
 {
     return i == 7 ? GAME_PROFILE_COVER_MAX + 1 : i == 8 ? PAL3PATCH_CONFIG_MAX :
-           i == 9 ? PAL3PATCH_DLL_MAX : i == 10 ? PAL3_FORWARDER_MAX : i >= FILE_TARGET_START ? GAME_PROFILE_FILE_SIZE_MAX + 1 : LAUNCHER_KV_MAX;
+           i == 9 ? PAL3PATCH_DLL_MAX : i == 10 ? PAL3_FORWARDER_MAX : i >= FILE_TARGET_START ? UINT_MAX : LAUNCHER_KV_MAX;
+}
+
+static void snapshot_free( struct snapshot *s )
+{
+    if (!s) return;
+    for (unsigned int i = 0; i < GAME_PROFILE_FILE_MAX; i++) free( s->file_data[i] );
+    free( s );
+}
+
+static int snapshot_clone( struct snapshot *out, const struct snapshot *in )
+{
+    *out = *in;
+    memset( out->file_data, 0, sizeof(out->file_data) );
+    for (unsigned int i = 0; i < GAME_PROFILE_FILE_MAX; i++) if (in->file_data[i])
+    {
+        unsigned int size = in->sizes[FILE_TARGET_START + i];
+        if (!(out->file_data[i] = malloc( size ? size : 1 ))) return 0;
+        memcpy( out->file_data[i], in->file_data[i], size );
+    }
+    return 1;
+}
+
+static int snapshot_set_file( struct snapshot *s, unsigned int index, const unsigned char *data, unsigned int size )
+{
+    unsigned int slot = index - FILE_TARGET_START;
+    unsigned char *copy = malloc( size ? size : 1 );
+    if (!copy) return 0;
+    memcpy( copy, data, size );
+    free( s->file_data[slot] );
+    s->file_data[slot] = copy;
+    s->sizes[index] = size;
+    s->exists[index] = 1;
+    return 1;
 }
 
 struct targets
@@ -1207,6 +1239,7 @@ static int snapshot_read( const char *path, struct snapshot *s )
     for (unsigned int i = 0; i < s->count; i++)
     {
         if (s->exists[i] > 1 || (!s->exists[i] && s->sizes[i]) || s->sizes[i] >= snapshot_limit( i )) goto done;
+        if (i >= FILE_TARGET_START && s->sizes[i] && !(s->file_data[i - FILE_TARGET_START] = malloc( s->sizes[i] ))) goto done;
         if (fread( SNAP_DATA(s, i), 1, s->sizes[i], file ) != s->sizes[i] ||
             ((i < 7 || i == 8 || i == 11) && memchr( SNAP_DATA(s, i), 0, s->sizes[i] ))) goto done;
     }
@@ -1217,15 +1250,22 @@ static int snapshot_read( const char *path, struct snapshot *s )
 
 static int snapshot_write( const char *path, const struct snapshot *s )
 {
-    size_t size = offsetof(struct snapshot, data), pos = size;
-    for (unsigned int i = 0; i < s->count; i++) size += s->sizes[i];
-    unsigned char *data = malloc( size );
-    if (!data) return 0;
-    memcpy( data, s, pos );
-    uint32_t crc = snapshot_crc( s ); memcpy( data + offsetof(struct snapshot, crc), &crc, sizeof(crc) );
-    for (unsigned int i = 0; i < s->count; i++)
-    { memcpy( data + pos, SNAP_DATA(s, i), s->sizes[i] ); pos += s->sizes[i]; }
-    int ok = durable_write( path, data, size ); free( data ); return ok;
+    char temp[1024];
+    FILE *file;
+    unsigned char header[offsetof(struct snapshot, data)];
+    if (snprintf( temp, sizeof(temp), "%s.new", path ) >= (int)sizeof(temp) ||
+        !safe_path( path ) || !safe_path( temp ) || !(file = fopen( temp, "wb" ))) return 0;
+    memcpy( header, s, sizeof(header) );
+    uint32_t crc = snapshot_crc( s );
+    memcpy( header + offsetof(struct snapshot, crc), &crc, sizeof(crc) );
+    int ok = fwrite( header, 1, sizeof(header), file ) == sizeof(header);
+    for (unsigned int i = 0; ok && i < s->count; i++)
+        ok = fwrite( SNAP_DATA(s, i), 1, s->sizes[i], file ) == s->sizes[i];
+    if (fflush( file ) || fsync( fileno( file ) )) ok = 0;
+    if (fclose( file )) ok = 0;
+    if (!ok) { remove( temp ); return 0; }
+    if (remove( path ) && errno != ENOENT) return 0;
+    return !rename( temp, path ) && sync_parent( path );
 }
 
 static int snapshot_capture( const struct targets *t, struct snapshot *s )
@@ -1254,10 +1294,26 @@ static int snapshot_capture( const struct targets *t, struct snapshot *s )
         if (i >= FILE_TARGET_START ? !replacement_parents( t->paths[i], 0 ) : !safe_path( t->paths[i] )) return 0;
         if ((file = fopen( t->paths[i], "rb" )))
         {
-            s->sizes[i] = fread( SNAP_DATA(s, i), 1, snapshot_limit( i ), file );
+            int ok = 1;
+            if (i >= FILE_TARGET_START)
+            {
+                struct stat st;
+                ok = !fstat( fileno( file ), &st ) && S_ISREG( st.st_mode ) && st.st_size >= 0 && st.st_size <= INT_MAX;
+                if (ok)
+                {
+                    s->sizes[i] = (unsigned int)st.st_size;
+                    if (s->sizes[i]) ok = (s->file_data[i - FILE_TARGET_START] = malloc( s->sizes[i] )) != NULL;
+                    if (ok) ok = fread( SNAP_DATA(s, i), 1, s->sizes[i], file ) == s->sizes[i];
+                }
+            }
+            else
+            {
+                s->sizes[i] = fread( SNAP_DATA(s, i), 1, snapshot_limit( i ), file );
+                ok = s->sizes[i] < snapshot_limit( i ) &&
+                    (i != 8 || !memchr( SNAP_DATA(s, i), 0, s->sizes[i] ));
+            }
             s->exists[i] = 1;
-            int ok = s->sizes[i] < snapshot_limit( i ) &&
-                (i != 8 || !memchr( SNAP_DATA(s, i), 0, s->sizes[i] )) && fgetc( file ) == EOF && !ferror( file );
+            ok = ok && fgetc( file ) == EOF && !ferror( file );
             fclose( file );
             if (!ok) return 0;
             if (i == 8) s->pal3patch_config[s->sizes[i]] = 0;
@@ -1305,9 +1361,9 @@ enum game_profile_result game_profile_recover( const char *settings, const char 
     struct snapshot *s;
     if (!target_paths( &t, settings, keys )) return GAME_PROFILE_IO;
     if (lstat( t.pending, &st )) return errno == ENOENT ? GAME_PROFILE_OK : GAME_PROFILE_RECOVERY;
-    s = malloc( sizeof(*s) );
+    s = calloc( 1, sizeof(*s) );
     int ok = s && snapshot_read( t.pending, s ) && snapshot_restore( &t, s ) && erase_durable( t.pending );
-    free( s );
+    snapshot_free( s );
     return ok ? GAME_PROFILE_OK : GAME_PROFILE_RECOVERY;
 }
 
@@ -1418,21 +1474,21 @@ enum game_profile_result game_profile_apply( const char *settings, const char *k
     }
     if (profile->file_count > GAME_PROFILE_FILE_MAX || (profile->file_count && profile->min_api < 13)) return GAME_PROFILE_INVALID;
     for (unsigned int i = 0; i < profile->file_count; i++)
-        if (!profile->files[i].data || profile->files[i].size > GAME_PROFILE_FILE_SIZE_MAX ||
+        if (!profile->files[i].data ||
             !replacement_path( profile->files[i].root, profile->files[i].path )) return GAME_PROFILE_INVALID;
     if (profile->min_api > GAME_PROFILE_API) return GAME_PROFILE_INCOMPATIBLE;
     if ((result = game_profile_binding_read( settings, &binding )) != GAME_PROFILE_OK) return result;
     first = strcmp( binding.id, profile->id ) || strcmp( binding.repository, repository ) || strcmp( binding.tag, tag );
     if (!first && profile->version < binding.version) return GAME_PROFILE_OLD;
     result = GAME_PROFILE_IO;
-    if (!target_paths( &t, settings, keys ) || !(before = malloc( sizeof(*before) )) ||
-        !(after = malloc( sizeof(*after) )) || !(kv = malloc( sizeof(*kv) )) || !(old = malloc( sizeof(*old) )) ) goto done;
+    if (!target_paths( &t, settings, keys ) || !(before = calloc( 1, sizeof(*before) )) ||
+        !(after = calloc( 1, sizeof(*after) )) || !(kv = malloc( sizeof(*kv) )) || !(old = malloc( sizeof(*old) )) ) goto done;
     if (!targets_load_files( &t )) goto done;
     for (unsigned int i = 0; i < profile->file_count; i++)
         if (targets_add_file( &t, profile->files[i].root, profile->files[i].path ) < 0)
         { result = GAME_PROFILE_INVALID; goto done; }
     if (!snapshot_capture( &t, before )) goto done;
-    *after = *before;
+    if (!snapshot_clone( after, before )) goto done;
     for (int i = 0; i < 2; i++)
     {
         const struct launcher_kv *next = i ? &profile->keys : &profile->settings;
@@ -1471,8 +1527,7 @@ enum game_profile_result game_profile_apply( const char *settings, const char *k
             int slot = targets_add_file( &t, profile->files[i].root, profile->files[i].path );
             if (slot < 0) goto done;
             unsigned int target = FILE_TARGET_START + slot;
-            after->sizes[target] = profile->files[i].size; after->exists[target] = 1;
-            memcpy( SNAP_DATA(after, target), profile->files[i].data, profile->files[i].size );
+            if (!snapshot_set_file( after, target, profile->files[i].data, profile->files[i].size )) goto done;
         }
     }
     memset( kv, 0, sizeof(*kv) );
@@ -1500,21 +1555,21 @@ enum game_profile_result game_profile_apply( const char *settings, const char *k
     after->sizes[0] = kv->size; memcpy( after->data[0], kv->text, LAUNCHER_KV_MAX );
     result = commit( &t, before, after, 1 );
  done:
-    free( before ); free( after ); free( kv ); free( old );
+    snapshot_free( before ); snapshot_free( after ); free( kv ); free( old );
     return result;
 }
 
 enum game_profile_result game_profile_restore( const char *settings, const char *keys )
 {
     struct targets t;
-    struct snapshot *before = malloc( sizeof(*before) ), *after = malloc( sizeof(*after) );
+    struct snapshot *before = calloc( 1, sizeof(*before) ), *after = calloc( 1, sizeof(*after) );
     enum game_profile_result result = game_profile_recover( settings, keys );
     if (result != GAME_PROFILE_OK) goto done;
     result = GAME_PROFILE_IO;
     if (before && after && target_paths( &t, settings, keys ) && snapshot_capture( &t, before ) && snapshot_read( t.backup, after ))
         result = commit( &t, before, after, 1 );
  done:
-    free( before ); free( after ); return result;
+    snapshot_free( before ); snapshot_free( after ); return result;
 }
 
 int game_profile_cover_path( const char *settings, char *out, size_t capacity )
@@ -1549,13 +1604,14 @@ enum game_profile_result game_profile_cheats_save( const char *settings, const c
     if ((result = game_profile_cheats_read( settings, &definitions, &previous )) != GAME_PROFILE_OK) return result;
     result = GAME_PROFILE_IO;
     if (!game_cheats_reconcile( &definitions, &definitions, state, 0, &clean ) ||
-        !target_paths( &t, settings, keys ) || !(before = malloc( sizeof(*before) )) || !(after = malloc( sizeof(*after) ))) goto done;
+        !target_paths( &t, settings, keys ) || !(before = calloc( 1, sizeof(*before) )) || !(after = calloc( 1, sizeof(*after) ))) goto done;
     if (!snapshot_capture( &t, before )) goto done;
-    *after = *before; after->sizes[6] = clean.size; after->exists[6] = 1;
+    if (!snapshot_clone( after, before )) goto done;
+    after->sizes[6] = clean.size; after->exists[6] = 1;
     memcpy( after->data[6], clean.text, LAUNCHER_KV_MAX );
     result = commit( &t, before, after, 0 ); /* Keep the last profile-install backup. */
  done:
-    free( before ); free( after ); return result;
+    snapshot_free( before ); snapshot_free( after ); return result;
 }
 
 const char *game_profile_error( enum game_profile_result result )
