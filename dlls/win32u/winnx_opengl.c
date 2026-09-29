@@ -459,8 +459,6 @@ static BOOL nx_surface_create( HWND hwnd, BOOL raw, int format, struct opengl_dr
         gl->base.buffer_map[GL_FRONT - GL_FRONT_LEFT] = GL_FRONT_LEFT;
         gl->base.buffer_map[GL_BACK - GL_FRONT_LEFT] = GL_FRONT_LEFT;
         gl->base.buffer_map[GL_FRONT_AND_BACK - GL_FRONT_LEFT] = GL_FRONT_LEFT;
-        nx_log( "[NXGL] %s pbuffer created hwnd=%p format=%d size=%dx%d",
-                offscreen ? "D7VK offscreen OpenGL" : "caps", hwnd, format, attribs[1], attribs[3] );
         *drawable = &gl->base;
         return TRUE;
     }

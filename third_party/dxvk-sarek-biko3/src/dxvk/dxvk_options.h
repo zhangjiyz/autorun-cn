@@ -1,0 +1,72 @@
+#pragma once
+
+#include "../util/config/config.h"
+
+#include "../vulkan/vulkan_loader.h"
+
+namespace dxvk {
+
+  struct DxvkOptions {
+    DxvkOptions() { }
+    DxvkOptions(const Config& config);
+
+    /// Enable debug utils (alternative to DXVK_PERF_EVENTS=1)
+    bool enableDebugUtils = false;
+
+    /// Enable state cache
+    bool enableStateCache = true;
+
+    /// Number of compiler threads
+    /// when using the state cache
+    int32_t numCompilerThreads = 0;
+
+    // Hides integrated GPUs if dedicated GPUs are
+    // present. May be necessary for some games that
+    // incorrectly assume monitor layouts.
+    bool hideIntegratedGraphics = false;
+
+    /// Device name
+    std::string deviceFilter;
+
+    // Tiler GPU tweaks. Currently biases host-visible
+    // allocations toward cached memory on tilers; the
+    // render-pass-op side is detected but not yet acted on.
+    Tristate tilerMode = Tristate::Auto;
+
+    // Zero-initialize host-visible mapped memory on allocation.
+    // Works around games that assume freshly mapped buffers are clean.
+    bool zeroMappedMemory = false;
+
+    /// Whether to use custom sin/cos approximation
+    Tristate lowerSinCos = Tristate::Auto;
+
+    /// Memory budget in bytes
+    VkDeviceSize maxMemoryBudget = 0u;
+
+    /// Shader compilation method. Supported values:
+    /// "dyasync" (default), "async", "none".
+    std::string shaderCompilationMethod;
+
+    // Number of compiler threads used by the
+    // active shader compilation method
+    int32_t numShaderCompilerThreads;
+
+    /// Frame pacing mode. Supported values: "", "low-latency", "min-latency".
+    /// Empty (default) preserves Sarek existing behaviour unchanged.
+    std::string framePace;
+
+    /// Fine-tuning offset for low-latency frame pacing, in microseconds.
+    /// Clamped to [-10000, 10000]. Defaults to 0.
+    int32_t lowLatencyOffset = 0;
+
+    /// Shader-related options
+    Tristate useRawSsbo = Tristate::Auto;
+
+    /// Workaround for NVIDIA driver bug 3114283
+    Tristate shrinkNvidiaHvvHeap;
+
+    /// HUD elements
+    std::string hud;
+  };
+
+}

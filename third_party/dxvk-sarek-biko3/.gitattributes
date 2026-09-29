@@ -1,0 +1,2 @@
+# Keep the imported source byte-for-byte; upstream contains trailing spaces.
+* -whitespace
