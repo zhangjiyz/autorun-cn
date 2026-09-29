@@ -250,8 +250,9 @@ with tempfile.TemporaryDirectory(prefix='autorun-ci-package-') as directory:
         assert output.read('switch/wine/drive_c/dxvk/d3d9.dll') == image
         assert result['features']['offline_profiles'] is True
         expected_profiles = ci.verify_profiles(profiles)
-        bundled = {name for name in output.namelist() if name.startswith('switch/wine/profiles/') and name.endswith('.zip')}
-        assert bundled == {'switch/wine/profiles/' + entry['filename'] for entry in expected_profiles}
+        bundled = {name for name in output.namelist() if name.startswith('switch/wine/profiles/')}
+        assert bundled == {'switch/wine/profiles/autorun-profiles.tsv'} | {
+            'switch/wine/profiles/' + entry['filename'] for entry in expected_profiles}
         for entry in expected_profiles:
             assert output.read('switch/wine/profiles/' + entry['filename']) == (release / entry['filename']).read_bytes()
 

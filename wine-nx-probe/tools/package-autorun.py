@@ -100,10 +100,6 @@ if args.no_example_games:
     for name in ('run-entry.txt', 'target.txt', 'vulkan-probe.txt'):
         (generic_stage / name).unlink(missing_ok=True)
     shutil.copy2(probe.parent / 'README.zh-CN.md', generic_stage / 'README.zh-CN.md')
-    zhaoyunzhuan_profile = generic_stage / 'profiles/zhaoyunzhuan'
-    zhaoyunzhuan_profile.mkdir(parents=True, exist_ok=True)
-    for name in ('Game.keys.txt', 'README.zh-CN.md', 'patch-game.py', 'binary-patch.json'):
-        shutil.copy2(probe / 'profiles/zhaoyunzhuan' / name, zhaoyunzhuan_profile / name)
     profile_dir = generic_stage / 'profiles'
     subprocess.run([sys.executable, str(tools / 'package-profiles.py'), '--output-dir', str(profile_dir),
                     '--repository', args.profile_repository or default_repository, '--release-tag', args.profile_release_tag], check=True)
