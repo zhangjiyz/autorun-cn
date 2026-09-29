@@ -4749,9 +4749,7 @@ HRESULT device_init(struct d3d9_device *device, struct d3d9 *parent, struct wine
     struct wined3d_adapter *wined3d_adapter;
     struct d3d9_swapchain *d3d_swapchain;
     struct wined3d_caps wined3d_caps;
-    char image[MAX_PATH], movie_center[2];
-    const char *name, *slash;
-    DWORD image_len;
+    char movie_center[2];
     unsigned int output_idx;
     unsigned i, count = 1;
     D3DCAPS9 caps;
@@ -4769,16 +4767,9 @@ HRESULT device_init(struct d3d9_device *device, struct d3d9 *parent, struct wine
     };
 
     device->multithreaded = !!(flags & D3DCREATE_MULTITHREADED);
-    image_len = GetModuleFileNameA(NULL, image, sizeof(image));
     if (GetEnvironmentVariableA("WINE_NX_PAL3_MOVIE_CENTER", movie_center, sizeof(movie_center)) == 1
-            && movie_center[0] == '1'
-            && image_len && image_len < sizeof(image))
-    {
-        name = strrchr(image, '\\');
-        slash = strrchr(image, '/');
-        if (slash && (!name || slash > name)) name = slash;
-        device->pal3_movie.enabled = !lstrcmpiA(name ? name + 1 : image, "PAL3.exe");
-    }
+            && movie_center[0] == '1')
+        device->pal3_movie.enabled = TRUE;
     output_idx = adapter;
     if (output_idx >= parent->wined3d_output_count)
         return D3DERR_INVALIDCALL;

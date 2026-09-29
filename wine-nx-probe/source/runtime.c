@@ -4410,20 +4410,12 @@ int main( int argc, char **argv )
                     else if (strcmp( value, "1" ))
                         log_line( "[WINED3D] invalid wined3d-csmt '%s'; enabled", value );
                 }
-                {
-                    const char *name = strrchr( target, '/' );
-                    const char *backslash = strrchr( target, '\\' );
-                    int pal3_target;
-
-                    if (backslash && (!name || backslash > name)) name = backslash;
-                    pal3_target = !strcasecmp( name ? name + 1 : target, "PAL3.exe" );
-                    if (pal3_target && launcher_kv_get( &kv, "pal3-black-overlay-skip", value, sizeof(value) )
-                            && !strcmp( value, "1" ))
-                        runtime_pal3_black_overlay_skip = 1;
-                    if (pal3_target && launcher_kv_get( &kv, "pal3-movie-center", value, sizeof(value) )
-                            && !strcmp( value, "1" ))
-                        runtime_pal3_movie_center = 1;
-                }
+                if (launcher_kv_get( &kv, "pal3-black-overlay-skip", value, sizeof(value) )
+                        && !strcmp( value, "1" ))
+                    runtime_pal3_black_overlay_skip = 1;
+                if (launcher_kv_get( &kv, "pal3-movie-center", value, sizeof(value) )
+                        && !strcmp( value, "1" ))
+                    runtime_pal3_movie_center = 1;
             }
 #ifdef WINE_NX_MESA_SWITCH
             runtime_dxvk = settings.dxvk;

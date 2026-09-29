@@ -4637,19 +4637,7 @@ void draw_primitive(struct wined3d_device *device, const struct wined3d_state *s
     if (pal3_skip_black_overlay == -1)
     {
         const char *value = getenv("WINE_NX_PAL3_BLACK_OVERLAY_SKIP");
-        char image[MAX_PATH];
-        const char *name, *slash;
-        DWORD length;
-
-        pal3_skip_black_overlay = 0;
-        if (value && value[0] == '1' && !value[1]
-                && (length = GetModuleFileNameA(NULL, image, sizeof(image))) && length < sizeof(image))
-        {
-            name = strrchr(image, '\\');
-            slash = strrchr(image, '/');
-            if (slash && (!name || slash > name)) name = slash;
-            pal3_skip_black_overlay = !lstrcmpiA(name ? name + 1 : image, "PAL3.exe");
-        }
+        pal3_skip_black_overlay = value && value[0] == '1' && !value[1];
     }
 
     if (!parameters->indirect)

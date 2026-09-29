@@ -149,7 +149,8 @@ def verify_profiles(index):
                                 any(ord(c) < 32 or c in '\\:' for c in destination) or
                                 any(part in ('', '.', '..') or part.endswith((' ', '.')) for part in destination.split('/')) or
                                 (base, destination.casefold()) in destinations or
-                                not re.fullmatch('0|[1-9][0-9]*', length) or int(length) > 1024 * 1024 or
+                                not re.fullmatch('0|[1-9][0-9]*', length) or
+                                (int(length) > 1024 * 1024 and int(api) < 16) or
                                 not re.fullmatch('[0-9a-f]{64}', file_digest)):
                             raise ValueError(f'Invalid replacement destination/size/hash: {filename}')
                         destinations.add((base, destination.casefold()))
