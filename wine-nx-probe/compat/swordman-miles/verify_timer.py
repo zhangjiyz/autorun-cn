@@ -12,28 +12,45 @@ import sys
 from unicorn import Uc, UC_ARCH_X86, UC_MODE_32, UC_HOOK_CODE
 from unicorn.x86_const import UC_X86_REG_EAX, UC_X86_REG_EIP, UC_X86_REG_ESP
 from build import MILES_SHA256, pe_image
+from build_standalone import PATCHED_SHA256
 
 
-def exercise(path, preference):
-    raw, mem, _ = pe_image(path)
-    assert hashlib.sha256(raw).hexdigest() == MILES_SHA256
+def exercise(path, preference, patched=False, base=0x21000000, active=2):
+    raw, mem, opt = pe_image(path)
+    assert hashlib.sha256(raw).hexdigest() == (PATCHED_SHA256 if patched else MILES_SHA256)
+    if base != 0x21000000:
+        # Follow the DLL's actual HIGHLOW relocation table, like the PE loader.
+        rva, size = struct.unpack_from('<II', raw, opt + 136)
+        end = rva + size
+        while rva < end:
+            page, length = struct.unpack_from('<II', mem, rva)
+            assert length >= 8 and rva + length <= end
+            for offset in range(rva + 8, rva + length, 2):
+                entry = struct.unpack_from('<H', mem, offset)[0]
+                if entry >> 12 == 0:
+                    continue
+                assert entry >> 12 == 3
+                target = page + (entry & 0xfff)
+                value = struct.unpack_from('<I', mem, target)[0]
+                struct.pack_into('<I', mem, target, (value + base - 0x21000000) & 0xffffffff)
+            rva += length
     emu = Uc(UC_ARCH_X86, UC_MODE_32)
-    emu.mem_map(0x21000000, (len(mem) + 4095) & ~4095)
-    emu.mem_write(0x21000000, bytes(mem))
+    emu.mem_map(base, (len(mem) + 4095) & ~4095)
+    emu.mem_write(base, bytes(mem))
     emu.mem_map(0x30000000, 4096)
     emu.mem_map(0x31000000, 4096)
     emu.mem_map(0x60000000, 0x10000)
     put = lambda address, value: emu.mem_write(address, struct.pack('<I', value))
-    put(0x2104a304 + 18 * 4, preference)
-    put(0x2104a0f0, 0x1234)  # Main-thread handle used by the timer.
-    put(0x2103a004, 0x31000000)  # SuspendThread
-    put(0x2103a100, 0x31000010)  # ResumeThread
-    put(0x2104a3cc, 0x30000000)  # One registered audio timer.
-    put(0x2104a2f8, 1)
-    put(0x2104a3d4, 99)
-    for address in (0x2104a3d0, 0x2104a3d8, 0x2104a3c0, 0x2104a3e4):
-        put(address, 0)
-    put(0x30000000, 2)  # Active timer.
+    put(base + 0x4a304 + 18 * 4, preference)
+    put(base + 0x4a0f0, 0x1234)  # Main-thread handle used by the timer.
+    put(base + 0x3a004, 0x31000000)  # SuspendThread
+    put(base + 0x3a100, 0x31000010)  # ResumeThread
+    put(base + 0x4a3cc, 0x30000000)  # One registered audio timer.
+    put(base + 0x4a2f8, 1)
+    put(base + 0x4a3d4, 99)
+    for offset in (0x4a3d0, 0x4a3d8, 0x4a3c0, 0x4a3e4):
+        put(base + offset, 0)
+    put(0x30000000, active)
     put(0x30000004, 0x31000020)  # Audio callback.
     put(0x30000008, 0x9876)  # Callback user data.
     put(0x3000000c, 0)  # Accumulated elapsed time.
@@ -47,7 +64,7 @@ def exercise(path, preference):
         if address == 0x31000030:
             cpu.emu_stop()
             return
-        if address not in (0x21001f10, 0x31000000, 0x31000010, 0x31000020):
+        if address not in (base + 0x1f10, 0x31000000, 0x31000010, 0x31000020):
             return
         stack = cpu.reg_read(UC_X86_REG_ESP)
         result, argc = 100, 0  # Miles clock reports one millisecond elapsed.
@@ -66,8 +83,9 @@ def exercise(path, preference):
         cpu.reg_write(UC_X86_REG_EIP, ret)
 
     emu.hook_add(UC_HOOK_CODE, hook)
-    emu.emu_start(0x210013b0, 0, count=10000)
+    emu.emu_start(base + 0x13b0, 0, count=10000)
     assert emu.reg_read(UC_X86_REG_EIP) == 0x31000030
+    assert emu.reg_read(UC_X86_REG_ESP) == sp + 24  # stdcall callback with five arguments.
     return counts
 
 
@@ -79,3 +97,12 @@ if __name__ == '__main__':
     assert serviced == {'suspend': 0, 'resume': 0, 'callback': 1}, serviced
     print('PASS: refused running-thread suspension skips the original Miles audio callback')
     print('PASS: preference 18 = 0 services that callback without SuspendThread/ResumeThread')
+    if len(sys.argv) > 2:
+        fixed = Path(sys.argv[2])
+        for base in (0x21000000, 0x22000000):
+            for preference in (0, 1, 0xffffffff):
+                assert exercise(fixed, preference, patched=True, base=base) == serviced
+                assert exercise(fixed, preference, patched=True, base=base, active=1) == {
+                    'suspend': 0, 'resume': 0, 'callback': 0}
+        print('PASS: complete DLL services active timers at original/relocated bases regardless of preference 18')
+        print('PASS: stopped timers stay stopped; callback arguments and stdcall stack preserved')

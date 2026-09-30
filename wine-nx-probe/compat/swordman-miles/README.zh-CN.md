@@ -1,4 +1,27 @@
-# Swordman Miles 兼容层
+# Swordman Miles 兼容修正
+
+## 当前适配包：完整 DLL
+
+适配包现在安装可独立加载的完整 `mss32.dll`，保留原库全部 315 个导出。
+文件不存在时直接拷贝，存在时由已有适配包事务备份后覆盖。
+用户无需准备 `mss32_autorun_original.dll`，安装器不读取该别名。
+
+维护者可从已核对的游戏库生成完整兼容库：
+
+```sh
+python3 wine-nx-probe/compat/swordman-miles/build_standalone.py /path/to/input/mss32.dll /path/to/output/mss32.dll
+python3 wine-nx-probe/compat/swordman-miles/verify_timer.py /path/to/input/mss32.dll /path/to/output/mss32.dll
+```
+
+输入仅在构建时使用，不进入用户安装步骤，也不会被工具改写。
+修正将偏移 `0x13bd` 的 `85 c0` 改为 `31 c0`，使定时器保存的局部暂停标志为零；
+原有分支跳过 SuspendThread 与对应的 ResumeThread。其余字节保持不变，
+包括导出、导入、资源和重定位，输出 SHA-256 为
+`f2d040218d7e63f83c799b005f688c1b4b150994442996b4c4929a46a1f15743`。
+已在 Unicorn 中核对原始/重定位装载地址、不同配置值及停止的定时器；
+新的完整 DLL 尚待 Switch 音乐、视频和持续运行验收。
+
+## 历史代理与诊断复现
 
 适用原版 `mss32.dll`：331776 字节，SHA-256
 `6a128953250b3d142245a9ca6facabf308666703c1f9c8c5b6ac95acce95403d`。
@@ -32,7 +55,8 @@ python3 wine-nx-probe/compat/swordman-miles/verify_timer.py /path/to/original/ms
 python3 wine-nx-probe/compat/swordman-miles/verify_proxy.py /path/to/output/mss32.dll
 ```
 
-部署时先校验设备原库，再将其改名为 `mss32_autorun_original.dll`，
+以下为旧代理的手动部署复现流程，当前完整 DLL 适配包不使用此流程。
+旧代理部署时先校验设备原库，再将其改名为 `mss32_autorun_original.dll`，
 将构建的兼容层放到同一游戏目录的 `mss32.dll`。兼容层不写调试日志。
 必须完全退出再启动游戏。回滚只需移走兼容层，把原库改回
 `mss32.dll`；游戏 EXE、数据与存档均无需修改。

@@ -101,7 +101,7 @@
       "version": 1,
       "min_api": 17,
       "keywords": "天地劫 神魔至尊传 神魔至尊傳 Swordman SWORDMAN",
-      "description": "适用于已验证的 Swordman V1.3 游戏目录；安装 cnc-ddraw、现有布局的 ddraw.ini、Miles 兼容代理、运行设置、按键与 Box64 参数。需预先将匹配的原版 mss32.dll 备份为 mss32_autorun_original.dll。",
+      "description": "适用于已验证的 Swordman V1.3 游戏目录；自动备份并安装 cnc-ddraw、现有布局的 ddraw.ini、完整 Miles 兼容库、运行设置、按键与 Box64 参数，无需手动改名 DLL。",
       "settings": "swordman/Swordman.wine-nx.txt",
       "keys": "swordman/Swordman.keys.txt",
       "cover": "swordman/cover.png",
@@ -111,7 +111,7 @@
         {"root": "game", "path": "ddraw.ini", "source": "swordman/ddraw.ini"},
         {"root": "game", "path": "cnc-ddraw.LICENSE", "source": "swordman/cnc-ddraw.LICENSE"},
         {"root": "game", "path": "mss32.dll", "source": "swordman/mss32.dll"},
-        {"root": "game", "path": "mss32-proxy.LICENSE", "source": "swordman/mss32-proxy.LICENSE"}
+        {"root": "game", "path": "mss32-compat.NOTICE", "source": "swordman/mss32-compat.NOTICE"}
       ]
     },
     {

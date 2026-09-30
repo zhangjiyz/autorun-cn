@@ -56,6 +56,10 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
     assert entries['biko3/files/2.bin'] == (PROBE / 'profiles/biko3/ddraw_.dll').read_bytes()
     assert b'game\tddraw_.dll\t700416\t7fed4325a623d9a1c83a05f145557ee2899a4ca035e0025f06ab7afe7fdf044b\n' in entries['biko3/files.tsv']
     assert entries['pal3a/cover.png'] == (PROBE / 'profiles/pal3a/cover.png').read_bytes()
+    assert entries['swordman/files/4.bin'] == (PROBE / 'profiles/swordman/mss32.dll').read_bytes()
+    assert b'game\tmss32.dll\t331776\tf2d040218d7e63f83c799b005f688c1b4b150994442996b4c4929a46a1f15743\n' in entries['swordman/files.tsv']
+    assert b'mss32_autorun_original.dll' not in entries['swordman/files/4.bin']
+    assert b'mss32-compat.NOTICE' in entries['swordman/files.tsv']
     disable_digests = {
         'newpalxp': 'b59b7398193aef23c6e2b2edd0a0a25d78b8d3e2df54ae5562bc1e63a0cad4a5',
         'zhaoyunzhuan': '0279b2a2a8d8f208bb0d40131d6ae42cbee9c271f234cb4a25dac9914d0d27b4',
@@ -149,6 +153,12 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
     run(*common, '-D__WINESRC__', '-D_WIN64', '-DWINE_UNIX_LIB', '-I' + str(PROBE.parent / 'include'),
         PROBE / 'tests/game_registry.c', *(['-liconv'] if os.uname().sysname == 'Darwin' else []), '-o', registry_test)
     run(registry_test)
+    swordman_zip = root / 'swordman.zip'
+    pack.build(PROBE / 'profiles/catalog.json', swordman_zip, selected='swordman')
+    swordman_test = root / 'swordman-profile'
+    run(*common, PROBE / 'tests/swordman_profile.c', PROBE / 'source/game_cheats.c',
+        *flags('minizip', 'libpng', 'openssl'), '-lz', '-o', swordman_test)
+    run(swordman_test, swordman_zip)
 
     # Generic replacements use both game-relative and C:-relative destinations.
     files_entry = json.loads(json.dumps(data['profiles'][0]))

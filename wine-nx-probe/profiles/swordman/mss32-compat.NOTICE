@@ -1,0 +1,15 @@
+Swordman Miles 5.0m compatibility DLL
+
+The complete mss32.dll is derived from the verified game-local Miles 5.0m DLL.
+Its original copyright information and license remain applicable.
+Original SHA-256: 6a128953250b3d142245a9ca6facabf308666703c1f9c8c5b6ac95acce95403d
+Modified SHA-256: f2d040218d7e63f83c799b005f688c1b4b150994442996b4c4929a46a1f15743
+
+One opcode at file offset 0x13bd is changed from TEST EAX,EAX to XOR EAX,EAX.
+This zeros the audio timer's local suspend preference snapshot, so its existing
+branches skip both SuspendThread and ResumeThread. All 315 original exports,
+the PE import table, resources and relocations are retained.
+
+This file is a complete DLL. It does not load mss32_autorun_original.dll.
+The former LGPL proxy and its source remain in compat/swordman-miles for
+historical reproduction; the adaptation package no longer installs that proxy.
