@@ -19,6 +19,8 @@
 
 后续把目录补齐做成通用单游戏设置 `ensure-game-dir=Data/catalog`，并纳入 Biko3 v1 适配包（API 15）。运行时每次启动前检查并补齐目录；目录已存在时保持其中的图片不变。适配包不包含 Biko3 的游戏目录 `DDraw.dll`，仍需使用单独部署的已验证版本。新 NRO 与启用此设置的 Biko3 配置已上传并读回校验；本轮真机日志出现 `[GAME DIR] ensured sdmc:/switch/wine/drive_c/Biko3/Data/catalog`，用户重启后确认鉴赏正常进入。适配包的启动器安装流程尚未实机测试。
 
+2026-09-30 复查当前设备目录后，适配包已包含 `ddraw.dll`，但缺少同目录的配套 `d3d9.dll`。后者从设备读回并核对 SHA-256 `43555a32bdf6e3509461c4761012cb38bd8b636025ca879115f685cea9738eb6` 后纳入 Biko3 v1 的整文件替换清单；`Data/catalog` 仍由启动配置创建。此时只完成打包和主机验证，双 DLL 安装后的真机启动尚待验证。
+
 重建时将 llvm-mingw 的 `bin` 加入 `PATH`，在仓库根目录运行：
 
 ```sh

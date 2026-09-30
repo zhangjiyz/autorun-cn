@@ -50,6 +50,8 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
     assert entries['biko3/cover.png'] == (PROBE / 'profiles/biko3/cover.png').read_bytes()
     assert entries['biko3/files/0.bin'] == (PROBE / 'profiles/biko3/ddraw.dll').read_bytes()
     assert len(entries['biko3/files/0.bin']) > 1024 * 1024
+    assert entries['biko3/files/1.bin'] == (PROBE / 'profiles/biko3/d3d9.dll').read_bytes()
+    assert b'game\td3d9.dll\t4337664\t43555a32bdf6e3509461c4761012cb38bd8b636025ca879115f685cea9738eb6\n' in entries['biko3/files.tsv']
     assert entries['pal3a/cover.png'] == (PROBE / 'profiles/pal3a/cover.png').read_bytes()
     disable_digests = {
         'newpalxp': 'b59b7398193aef23c6e2b2edd0a0a25d78b8d3e2df54ae5562bc1e63a0cad4a5',
@@ -209,7 +211,7 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
     run(core, valid, *bad)
     # v21 packages remain readable by the new runtime.
     legacy = json.loads(json.dumps(data)); legacy['schema'] = 1
-    legacy['profiles'] = [entry for entry in legacy['profiles'] if entry['id'] != 'biko3']
+    legacy['profiles'] = [entry for entry in legacy['profiles'] if entry['id'] not in ('biko3', 'swordman')]
     for entry in legacy['profiles']:
         entry.pop('cheats', None); entry.pop('cover', None); entry.pop('binary_patch', None)
         entry.pop('raw_files', None); entry.pop('disable_file', None); entry.pop('files', None); entry['min_api'] = 1

@@ -301,7 +301,7 @@ static int allowed_key( const char *key, int controls )
         "windows|dxvk-version|vkd3d-version|dxvk-hud|frame-limit|vsync|address-space|";
     static const char keys[] =
         "|LSTICK|RSTICK|DPAD|TOUCH|UP|DOWN|LEFT|RIGHT|LUP|LDOWN|LLEFT|LRIGHT|RUP|RDOWN|RLEFT|RRIGHT|"
-        "A|B|X|Y|L|R|ZL|ZR|PLUS|MINUS|STICKL|STICKR|";
+        "A|B|X|Y|L|R|ZL|ZR|PLUS|MINUS|STICKL|STICKR|TUP|TDOWN|TLEFT|TRIGHT|";
     char needle[80];
     if (snprintf( needle, sizeof(needle), "|%s|", key ) >= (int)sizeof(needle)) return 0;
     /* Accept previous internal baselines, but never accept these keys from a new package. */

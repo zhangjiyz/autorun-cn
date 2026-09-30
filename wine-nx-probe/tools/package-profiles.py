@@ -50,7 +50,7 @@ def replacement_files(root, items):
 
 
 KEYS = set('LSTICK RSTICK DPAD TOUCH UP DOWN LEFT RIGHT LUP LDOWN LLEFT LRIGHT RUP RDOWN RLEFT RRIGHT '
-           'A B X Y L R ZL ZR PLUS MINUS STICKL STICKR'.lower().split())
+           'A B X Y L R ZL ZR PLUS MINUS STICKL STICKR TUP TDOWN TLEFT TRIGHT'.lower().split())
 
 
 def unique_object(pairs):
@@ -109,6 +109,8 @@ def defaults(root, relative, allowed, min_api=0):
             if min_api < 15:
                 raise ValueError('ensure-game-dir requires profile API 15')
             replacement_path('game', value)
+        if key in {'tup', 'tdown', 'tleft', 'tright'} and min_api < 17:
+            raise ValueError('finger direction mappings require profile API 17')
         found.add(key)
     return data
 

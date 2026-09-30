@@ -99,13 +99,20 @@
       "id": "swordman",
       "name": "天地劫：神魔至尊传",
       "version": 1,
-      "min_api": 13,
+      "min_api": 17,
       "keywords": "天地劫 神魔至尊传 神魔至尊傳 Swordman SWORDMAN",
-      "description": "适用于已验证的 Swordman V1.3 游戏目录；沿用现有的 cnc-ddraw 和 Miles 兼容 DLL，安装运行设置、按键、Box64 参数与封面。",
+      "description": "适用于已验证的 Swordman V1.3 游戏目录；安装 cnc-ddraw、现有布局的 ddraw.ini、Miles 兼容代理、运行设置、按键与 Box64 参数。需预先将匹配的原版 mss32.dll 备份为 mss32_autorun_original.dll。",
       "settings": "swordman/Swordman.wine-nx.txt",
       "keys": "swordman/Swordman.keys.txt",
       "cover": "swordman/cover.png",
-      "files": [{"root": "game", "path": "Swordman.box64.txt", "source": "swordman/Swordman.box64.txt"}]
+      "files": [
+        {"root": "game", "path": "Swordman.box64.txt", "source": "swordman/Swordman.box64.txt"},
+        {"root": "game", "path": "ddraw.dll", "source": "swordman/ddraw.dll"},
+        {"root": "game", "path": "ddraw.ini", "source": "swordman/ddraw.ini"},
+        {"root": "game", "path": "cnc-ddraw.LICENSE", "source": "swordman/cnc-ddraw.LICENSE"},
+        {"root": "game", "path": "mss32.dll", "source": "swordman/mss32.dll"},
+        {"root": "game", "path": "mss32-proxy.LICENSE", "source": "swordman/mss32-proxy.LICENSE"}
+      ]
     },
     {
       "id": "biko3",
@@ -113,11 +120,14 @@
       "version": 1,
       "min_api": 16,
       "keywords": "尾行3 尾行 Biko3 Biko_DVD 美少女游戏",
-      "description": "适用于已核对的 Biko_DVD.exe；启用单游戏图形设置、补齐 Data/catalog，并安装游戏目录 ddraw.dll。",
+      "description": "适用于已核对的 Biko_DVD.exe；启用单游戏图形设置、补齐 Data/catalog，并安装游戏目录 ddraw.dll、d3d9.dll。",
       "settings": "biko3/Biko_DVD.wine-nx.txt",
       "keys": "biko3/Biko_DVD.keys.txt",
       "cover": "biko3/cover.png",
-      "files": [{"root": "game", "path": "ddraw.dll", "source": "biko3/ddraw.dll"}]
+      "files": [
+        {"root": "game", "path": "ddraw.dll", "source": "biko3/ddraw.dll"},
+        {"root": "game", "path": "d3d9.dll", "source": "biko3/d3d9.dll"}
+      ]
     },
     {
       "id": "dmc4-dx9",
