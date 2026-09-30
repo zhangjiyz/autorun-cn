@@ -21,6 +21,16 @@
 
 2026-09-30 复查当前设备目录后，适配包已包含 `ddraw.dll`，但缺少同目录的配套 `d3d9.dll`。后者从设备读回并核对 SHA-256 `43555a32bdf6e3509461c4761012cb38bd8b636025ca879115f685cea9738eb6` 后纳入 Biko3 v1 的整文件替换清单；`Data/catalog` 仍由启动配置创建。此时只完成打包和主机验证，双 DLL 安装后的真机启动尚待验证。
 
+同日对比成功真机日志与另一份闪退日志：成功启动从游戏目录加载了 `ddraw_.dll` 并创建 `IDirect3DTnLHalDevice`；闪退启动找不到 `ddraw_.dll`，回退系统 `ddraw.dll`，在字体创建失败后创建 `IDirect3DRGBDevice` 并访问违例。Sarek 的 `GetProxiedDDrawModule()` 优先加载 `ddraw_.dll`，失败时会回退到系统 `ddraw.dll`。从成功设备读回的 Wine DirectDraw 代理（PE32/i386，700416 字节，SHA-256 `7fed4325a623d9a1c83a05f145557ee2899a4ca035e0025f06ab7afe7fdf044b`）已按要求作为第三个游戏目录文件纳入包。
+
+随后在同一台 Switch、同一个 `Biko3` 目录做了对照：临时停用 `ddraw_.dll`，保持已核对的 `ddraw.dll`、`d3d9.dll` 与 DXVK 图形后端，`Biko_DVD.exe` 仍回退系统 `ddraw.dll`、创建 `IDirect3DTnLHalDevice` 并至少提交 90 帧。再用 SHA-256 相同的 EXE 副本命名为 `biko3DVD.exe`，保持同一目录和 DLL，日志记录到第 560 帧，也未出现字体错误。故 `ddraw_.dll` 与原 EXE 文件名都不是启动的必要条件；旧日志中的字体初始化失败尚未复现，不能归因于这两个差异。游戏 `Type_G.FTT`、`Type_S.FTT` 与成功设备上的文件哈希一致，顶层 167 个 `Data` 文件名称和大小一致。新增三 DLL 适配包的安装与持续运行仍未单独验收。
+
+同日重装完整主程序后，在原来成功的 Switch 上复现了相同的 `0043F1C8` 空指针读取。详细日志确认 FreeType 2.13.3 与 Switch 共享字体正常初始化，但 `HKLM\Software\illusion\Bikou3_DVD` 不存在。游戏读取 `INSTALLDIR` 失败后退回 `GetCurrentDirectoryA()`，在主启动分支直接拼接 `Data`，形成错误的 `C:\Biko3Data\`；配置、字体缓存与游戏资源均从这个不存在的目录打开。`Type_S.FTT` 创建返回 `c000003a`（路径不存在），随后游戏报告字体创建失败并继续初始化，最终访问空对象。反汇编显示这个字体错误分支检查的是字体缓存生成/写入函数的返回值，不能等同于 `CreateFontA` 失败。重装前的详细日志在同一个注册表读取位置成功打开该键并查询 `INSTALLDIR`。游戏 EXE、三份 DLL、两份 FTT 及 `setting.cfg` 在重装前后 SHA-256 一致，因此已定位到缺失的游戏安装目录注册信息；设备只补回 `INSTALLDIR=C:\Biko3\` 后重新启动，日志恢复创建 `IDirect3DTnLHalDevice` 并记录 640×480 画面提交成功，未再出现字体错误、D3D9 纹理创建失败或 `0043F1C8` 崩溃。当前日志记录到前四次画面提交，因此只确认启动恢复，持续运行仍需另外验收。该值需要末尾反斜杠，并应按实际游戏目录生成；仅增加 `ddraw_.dll` 或 `Data/catalog` 不能修复此路径。
+
+随后新增通用单游戏设置 `registry-install-dir=Software/illusion/Bikou3_DVD`（API 18），纳入 Biko3 v1 测试适配包。每次启动根据所选 EXE 的实际 DOS 目录生成末尾带反斜杠的 `INSTALLDIR`，缺失时创建，移动目录后更新，保留其他注册项；通过原生 NT 注册表 API 写入并在游戏加载前持久化。未配置的游戏保持原行为。定向 NRO 编译、注册表主机回归和适配包回归通过；三份 DLL 与已核对的真机读回文件哈希一致，ZIP 清单和依赖检查通过。未运行完整 CI。
+
+2026-09-30 在用户彻底关闭 AutoRun 后，备份并删除真机的整个 `Software\\illusion\\Bikou3_DVD` 子键，上传新 NRO（SHA-256 `1440cf5a6fc8fdf4c19ba349f09f752d0d287c0d2972f55286c54143bea13489`）及启用注册表补齐的游戏配置，逐项读回校验。随后清除了在线适配包管理表缓存；用户测试后确认该问题已修复。新一轮日志在游戏加载前出现 `[GAME REGISTRY] HKLM/Software/illusion/Bikou3_DVD INSTALLDIR from C:\\Biko3\\Biko_DVD.exe: updated status=00000000`，真机注册表重新生成 `INSTALLDIR=C:\\Biko3\\`，并创建 `IDirect3DTnLHalDevice`、成功提交 640×480 画面。由此确认缺失注册项的自动补齐与本次启动闪退修复；新增三 DLL 包的启动器安装流程、持续运行及其他游戏功能仍未逐项验收。
+
 重建时将 llvm-mingw 的 `bin` 加入 `PATH`，在仓库根目录运行：
 
 ```sh

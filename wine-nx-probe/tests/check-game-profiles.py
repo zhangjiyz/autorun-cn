@@ -46,12 +46,15 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
     assert not any(name.startswith('pal3a/') and name.endswith(('.dll', '.conf')) for name in entries)
     assert b'click:' not in entries['pal3a/keys.txt']
     assert b'ensure-game-dir=Data/catalog\n' in entries['biko3/settings.txt']
+    assert b'registry-install-dir=Software/illusion/Bikou3_DVD\n' in entries['biko3/settings.txt']
     assert entries['biko3/keys.txt'] == (PROBE / 'profiles/biko3/Biko_DVD.keys.txt').read_bytes()
     assert entries['biko3/cover.png'] == (PROBE / 'profiles/biko3/cover.png').read_bytes()
     assert entries['biko3/files/0.bin'] == (PROBE / 'profiles/biko3/ddraw.dll').read_bytes()
     assert len(entries['biko3/files/0.bin']) > 1024 * 1024
     assert entries['biko3/files/1.bin'] == (PROBE / 'profiles/biko3/d3d9.dll').read_bytes()
     assert b'game\td3d9.dll\t4337664\t43555a32bdf6e3509461c4761012cb38bd8b636025ca879115f685cea9738eb6\n' in entries['biko3/files.tsv']
+    assert entries['biko3/files/2.bin'] == (PROBE / 'profiles/biko3/ddraw_.dll').read_bytes()
+    assert b'game\tddraw_.dll\t700416\t7fed4325a623d9a1c83a05f145557ee2899a4ca035e0025f06ab7afe7fdf044b\n' in entries['biko3/files.tsv']
     assert entries['pal3a/cover.png'] == (PROBE / 'profiles/pal3a/cover.png').read_bytes()
     disable_digests = {
         'newpalxp': 'b59b7398193aef23c6e2b2edd0a0a25d78b8d3e2df54ae5562bc1e63a0cad4a5',
@@ -72,6 +75,11 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
 
     invalid('path-traversal', [(name if name != 'newpal-steam/keys.txt' else '../Game.keys.txt', data) for name, data in entries.items()])
     invalid('unknown-setting', [(name, b'run-command=evil\n' if name == 'newpal-steam/settings.txt' else data) for name, data in entries.items()])
+    for unsafe in ('Software/', 'System/foo', 'Software/../foo', 'Software/a\\b', 'Software/a:', 'Software/a/'):
+        invalid('registry-' + str(len(bad)), [(name, data.replace(b'Software/illusion/Bikou3_DVD', unsafe.encode())
+                                             if name == 'biko3/settings.txt' else data) for name, data in entries.items()])
+    invalid('registry-old-api', [(name, data.replace(b'biko3\t\xe5\xb0\xbe\xe8\xa1\x8c3\t1\t18\t', b'biko3\t\xe5\xb0\xbe\xe8\xa1\x8c3\t1\t17\t')
+                                  if name == 'catalog.tsv' else data) for name, data in entries.items()])
     invalid('duplicate-setting', [(name, data + b'controller=keyboard\n' if name == 'newpal-steam/settings.txt' else data) for name, data in entries.items()])
     invalid('oversized', [(name, b'#' * 8192 if name == 'newpal-steam/keys.txt' else data) for name, data in entries.items()])
     invalid('missing-file', [(name, data) for name, data in entries.items() if name != 'newpal-steam/keys.txt'])
@@ -100,7 +108,8 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
                     lambda d: next(p for p in d['profiles'] if p['id'] == 'zhaoyunzhuan').update(min_api=11),
                     lambda d: next(p for p in d['profiles'] if p['id'] == 'newpalxp').update(min_api=11),
                     lambda d: next(p for p in d['profiles'] if p['id'] == 'dmc4-dx9').update(min_api=13),
-                    lambda d: next(p for p in d['profiles'] if p['id'] == 'biko3').update(min_api=15)):
+                    lambda d: next(p for p in d['profiles'] if p['id'] == 'biko3').update(min_api=15),
+                    lambda d: next(p for p in d['profiles'] if p['id'] == 'biko3').update(min_api=17)):
         broken = json.loads(json.dumps(data)); mutator(broken)
         fixture = maintenance / 'catalog.json'; fixture.write_text(json.dumps(broken))
         try:
@@ -122,6 +131,12 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
         else:
             raise AssertionError(f'unsafe game directory accepted: {unsafe}')
     biko_settings.write_text(original_settings)
+    for unsafe in ('Software/', 'System/foo', 'Software/../foo', 'Software/a\\b', 'Software/a:', 'Software/a/'):
+        biko_settings.write_text(original_settings.replace('Software/illusion/Bikou3_DVD', unsafe))
+        try: pack.build(maintenance / 'catalog.json', root / 'bad-registry-output.zip')
+        except ValueError: pass
+        else: raise AssertionError(f'unsafe registry key accepted: {unsafe}')
+    biko_settings.write_text(original_settings)
 
     common = [os.environ.get('CC', 'cc'), '-std=gnu11', '-Wall', '-Wextra', '-Werror',
               '-O1', '-g', '-fsanitize=undefined', '-fno-omit-frame-pointer', '-I' + str(PROBE / 'source')]
@@ -130,6 +145,10 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
     directory_test = root / 'game-directories'
     run(*common, PROBE / 'tests/game_directories.c', PROBE / 'source/game_directories.c', '-o', directory_test)
     run(directory_test)
+    registry_test = root / 'game-registry'
+    run(*common, '-D__WINESRC__', '-D_WIN64', '-DWINE_UNIX_LIB', '-I' + str(PROBE.parent / 'include'),
+        PROBE / 'tests/game_registry.c', *(['-liconv'] if os.uname().sysname == 'Darwin' else []), '-o', registry_test)
+    run(registry_test)
 
     # Generic replacements use both game-relative and C:-relative destinations.
     files_entry = json.loads(json.dumps(data['profiles'][0]))

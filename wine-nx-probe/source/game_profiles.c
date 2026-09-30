@@ -1,6 +1,7 @@
 /* Profile resources are bounded and validated before installation. PAL3's
  * original patch DLLs are allowed only at the verified hashes below. */
 #include "game_profiles.h"
+#include "game_registry.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -296,7 +297,7 @@ static int parse_disable_file( const char *text, char digest[65] )
 static int allowed_key( const char *key, int controls )
 {
     static const char settings[] =
-        "|title|d3d|d3d9|own-controls|controller|verbose|profile|window-fit|sdl-audio|sd-stat-cache|sd-clean-writer-cache|locale|wined3d-renderer|wined3d-frontbuffer-swap|wined3d-explicit-buffer-flush|wined3d-csmt|pal3-black-overlay-skip|pal3-movie-center|d7vk-offscreen-opengl|d7vk-biko3-patches|vulkan-fs-hack-rgba-view|ensure-game-dir|"
+        "|title|d3d|d3d9|own-controls|controller|verbose|profile|window-fit|sdl-audio|sd-stat-cache|sd-clean-writer-cache|locale|wined3d-renderer|wined3d-frontbuffer-swap|wined3d-explicit-buffer-flush|wined3d-csmt|pal3-black-overlay-skip|pal3-movie-center|d7vk-offscreen-opengl|d7vk-biko3-patches|vulkan-fs-hack-rgba-view|ensure-game-dir|registry-install-dir|"
         "aspect-fit|touch-coordinates|left-stick-run|left-stick-eight-way|left-stick-aim|left-stick-move|"
         "windows|dxvk-version|vkd3d-version|dxvk-hud|frame-limit|vsync|address-space|";
     static const char keys[] =
@@ -339,6 +340,7 @@ static int canonical_kv( const struct launcher_kv *in, struct launcher_kv *out, 
         end = start + strlen( start ); while (end > start && isspace( (unsigned char)end[-1] )) end--;
         if (end == start || (size_t)(end - start) >= sizeof(value)) return 0;
         memcpy( value, start, end - start ); value[end - start] = 0;
+        if (!strcmp( key, "registry-install-dir" ) && !game_registry_valid_key( value )) return 0;
         if (!launcher_kv_set( out, key, value )) return 0;
     }
     return 1;
@@ -588,6 +590,9 @@ enum game_profile_result game_profiles_load( const char *archive, struct game_pr
     for (int i = 0; i < catalog->count; i++)
     {
         struct game_profile *p = &catalog->entries[i];
+        char registry_key[384];
+        if (launcher_kv_get( &p->settings, "registry-install-dir", registry_key, sizeof(registry_key) ) &&
+            p->min_api < 18) goto done;
         if (seen[i][9] != !!p->file_count) goto done;
         for (unsigned int k = 0; k < p->file_count; k++) if (!seen[i][10 + k]) goto done;
     }
@@ -1473,6 +1478,9 @@ enum game_profile_result game_profile_apply( const char *settings, const char *k
                 profile->raw_sizes[i] >= pal3_raw_limits[i]) return GAME_PROFILE_INVALID;
     }
     if (profile->file_count > GAME_PROFILE_FILE_MAX || (profile->file_count && profile->min_api < 13)) return GAME_PROFILE_INVALID;
+    char registry_key[384];
+    if (launcher_kv_get( &profile->settings, "registry-install-dir", registry_key, sizeof(registry_key) ) &&
+        (profile->min_api < 18 || !game_registry_valid_key( registry_key ))) return GAME_PROFILE_INVALID;
     for (unsigned int i = 0; i < profile->file_count; i++)
         if (!profile->files[i].data ||
             !replacement_path( profile->files[i].root, profile->files[i].path )) return GAME_PROFILE_INVALID;

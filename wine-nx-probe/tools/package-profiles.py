@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 from zipfile import ZipFile, ZipInfo, ZIP_DEFLATED
 
 PROBE = Path(__file__).resolve().parents[1]
-SETTINGS = set('title d3d d3d9 own-controls controller verbose profile window-fit sdl-audio sd-stat-cache sd-clean-writer-cache locale wined3d-renderer wined3d-frontbuffer-swap wined3d-explicit-buffer-flush wined3d-csmt pal3-black-overlay-skip pal3-movie-center d7vk-offscreen-opengl d7vk-biko3-patches vulkan-fs-hack-rgba-view ensure-game-dir '
+SETTINGS = set('title d3d d3d9 own-controls controller verbose profile window-fit sdl-audio sd-stat-cache sd-clean-writer-cache locale wined3d-renderer wined3d-frontbuffer-swap wined3d-explicit-buffer-flush wined3d-csmt pal3-black-overlay-skip pal3-movie-center d7vk-offscreen-opengl d7vk-biko3-patches vulkan-fs-hack-rgba-view ensure-game-dir registry-install-dir '
                'aspect-fit touch-coordinates left-stick-run left-stick-eight-way left-stick-aim left-stick-move '
                'windows dxvk-version vkd3d-version dxvk-hud frame-limit vsync address-space'.split())
 PAL3_RAW_FILES = {
@@ -108,6 +108,13 @@ def defaults(root, relative, allowed, min_api=0):
         if key == 'ensure-game-dir':
             if min_api < 15:
                 raise ValueError('ensure-game-dir requires profile API 15')
+            replacement_path('game', value)
+        if key == 'registry-install-dir':
+            if min_api < 18:
+                raise ValueError('registry-install-dir requires profile API 18')
+            if (not value.lower().startswith('software/') or len(value.encode()) >= 224 or
+                    any(ord(c) >= 127 for c in value)):
+                raise ValueError('registry-install-dir requires an ASCII Software subkey')
             replacement_path('game', value)
         if key in {'tup', 'tdown', 'tleft', 'tright'} and min_api < 17:
             raise ValueError('finger direction mappings require profile API 17')

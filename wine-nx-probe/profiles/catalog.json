@@ -118,15 +118,16 @@
       "id": "biko3",
       "name": "尾行3",
       "version": 1,
-      "min_api": 16,
+      "min_api": 18,
       "keywords": "尾行3 尾行 Biko3 Biko_DVD 美少女游戏",
-      "description": "适用于已核对的 Biko_DVD.exe；启用单游戏图形设置、补齐 Data/catalog，并安装游戏目录 ddraw.dll、d3d9.dll。",
+      "description": "适用于已核对的 Biko_DVD.exe；自动补齐实际安装目录注册项、Data/catalog，启用单游戏图形设置并安装 ddraw.dll、d3d9.dll、ddraw_.dll。",
       "settings": "biko3/Biko_DVD.wine-nx.txt",
       "keys": "biko3/Biko_DVD.keys.txt",
       "cover": "biko3/cover.png",
       "files": [
         {"root": "game", "path": "ddraw.dll", "source": "biko3/ddraw.dll"},
-        {"root": "game", "path": "d3d9.dll", "source": "biko3/d3d9.dll"}
+        {"root": "game", "path": "d3d9.dll", "source": "biko3/d3d9.dll"},
+        {"root": "game", "path": "ddraw_.dll", "source": "biko3/ddraw_.dll"}
       ]
     },
     {

@@ -32,6 +32,7 @@
 #include "launcher_list.h"
 #include "launcher_settings.h"
 #include "game_directories.h"
+#include "game_registry.h"
 #include "config_json.h"
 #include "upstream_feature_defaults.h"
 #include "sd_cache.h"
@@ -450,6 +451,7 @@ static int runtime_d7vk_biko3_patches;
 static char runtime_vkd3d_version[32];
 static char runtime_dxvk_version[32];
 static char runtime_locale[48];
+static char runtime_registry_install_dir[384];
 
 /* libdrm_nouveau's switch for CPU-cacheable pinned GPU memory, cleared by
  * sdmc:/switch/wine/gl-uncached.txt containing 1. */
@@ -4337,6 +4339,7 @@ int main( int argc, char **argv )
         runtime_vkd3d_version[0] = 0;
         runtime_dxvk_version[0] = 0;
         runtime_locale[0] = 0;
+        runtime_registry_install_dir[0] = 0;
         runtime_wined3d_gdi = 0;
         runtime_wined3d_frontbuffer_swap = 0;
         runtime_wined3d_explicit_buffer_flush = 1;
@@ -4350,6 +4353,9 @@ int main( int argc, char **argv )
             launcher_kv_load( &kv, settings_path ) && kv.size)
         {
             char directory[1024], relative[384];
+
+            launcher_kv_get( &kv, "registry-install-dir", runtime_registry_install_dir,
+                             sizeof(runtime_registry_install_dir) );
 
             if (launcher_kv_get( &kv, "ensure-game-dir", relative, sizeof(relative) ))
             {
@@ -4619,6 +4625,19 @@ int main( int argc, char **argv )
         }
         runtime_init_peb_process( teb, module, params );
         log_line( "[PEB] image=%s nt=\\??\\%s", dos_path, dos_path );
+
+        if (runtime_registry_install_dir[0])
+        {
+            int changed;
+            status = game_registry_ensure_install_dir( runtime_registry_install_dir, dos_path, &changed );
+            log_line( "[GAME REGISTRY] HKLM/%s INSTALLDIR from %s: %s status=%08x",
+                      runtime_registry_install_dir, dos_path, changed ? "updated" : "unchanged", status );
+            if (status)
+            {
+                log_line( "[FAIL] cannot persist game installation directory" );
+                return return_to_launcher();
+            }
+        }
 
 #ifdef WINE_NX_AMD64
         if (target_machine == IMAGE_FILE_MACHINE_AMD64)

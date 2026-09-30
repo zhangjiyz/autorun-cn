@@ -7,3 +7,4 @@ d7vk-offscreen-opengl=1
 vulkan-fs-hack-rgba-view=1
 d7vk-biko3-patches=1
 ensure-game-dir=Data/catalog
+registry-install-dir=Software/illusion/Bikou3_DVD
