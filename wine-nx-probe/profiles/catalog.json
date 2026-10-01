@@ -131,6 +131,22 @@
       ]
     },
     {
+      "id": "zero-time-dilemma",
+      "name": "Zero Escape: Zero Time Dilemma",
+      "version": 1,
+      "min_api": 19,
+      "keywords": "Zero Escape Zero Time Dilemma 极限脱出 零时困境 311240",
+      "description": "适用于已验证的 AppID 311240 文件；安装 OpenAL、按键和 RUNE 数据目录，首次启动前自动注册 DirectInput8。",
+      "settings": "zero-time-dilemma/Zero Escape.wine-nx.txt",
+      "keys": "zero-time-dilemma/Zero Escape.keys.txt",
+      "files": [
+        {"root": "game", "path": "OpenAL32.dll", "source": "zero-time-dilemma/OpenAL32.dll"},
+        {"root": "game", "path": "OpenAL32.LICENSE", "source": "zero-time-dilemma/OpenAL32.LICENSE"},
+        {"root": "game", "path": "OpenAL32-pffft.LICENSE", "source": "zero-time-dilemma/OpenAL32-pffft.LICENSE"},
+        {"root": "drive_c", "path": "users/Public/Documents/Steam/RUNE/311240/profile-directory.txt", "source": "zero-time-dilemma/profile-directory.txt"}
+      ]
+    },
+    {
       "id": "dmc4-dx9",
       "name": "鬼泣4",
       "version": 1,

@@ -97,6 +97,13 @@ if components.is_file():
         assert f"Symbol: {symbol} " in info, f"Missing components setup import: {symbol}"
     deps = re.findall(r"^Import \{\n  Name: (.+)$", info, re.M)
     assert deps and all(dep.lower() in syswow64 for dep in deps), deps
+com32 = stage / "drive_c/windows/autorun-register-com32.exe"
+info = inspect(com32, "--coff-imports")
+assert "Arch: i386\n" in info
+for symbol in ("CreateFileA", "ReadFile", "LoadLibraryExW", "GetProcAddress", "NtDisplayString"):
+    assert f"Symbol: {symbol} " in info, f"Missing COM32 helper import: {symbol}"
+deps = re.findall(r"^Import \{\n  Name: (.+)$", info, re.M)
+assert deps and all(dep.lower() in syswow64 for dep in deps), deps
 assert all(dep.lower() in syswow64 for dep in deps), f"7zr load-time imports not staged: {deps}"
 assert (stage / "wine-nx-runtime.nro").read_bytes()[16:20] == b"NRO0"
 target = (stage / "target.txt").read_text().strip()

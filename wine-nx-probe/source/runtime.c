@@ -33,6 +33,7 @@
 #include "launcher_settings.h"
 #include "game_directories.h"
 #include "game_registry.h"
+#include "game_com32.h"
 #include "config_json.h"
 #include "upstream_feature_defaults.h"
 #include "sd_cache.h"
@@ -3620,8 +3621,12 @@ static void release_thread_local_pages( void )
 #define COMPONENTS_VERSION 1
 #define COMPONENTS_SETUP   RUNTIME_DIR "/drive_c/windows/autorun-setup.exe"
 #define COMPONENTS_DONE    RUNTIME_DIR "/registry/components-1.done"
+#define COM32_SETUP        RUNTIME_DIR "/drive_c/windows/autorun-register-com32.exe"
+#define COM32_REQUEST      RUNTIME_DIR "/drive_c/windows/autorun-com32-request.txt"
 static int runtime_components_run;
 static int runtime_components_auto;
+static int runtime_com32_run;
+static char runtime_com32_name[49];
 
 /* The exit code the program gave NtTerminateProcess (dlls/ntdll/unix/process.c);
  * ~0 while it has not ended by itself. */
@@ -3653,6 +3658,54 @@ static void run_components_first( char *target, size_t size )
               name ? name + 1 : target );
     snprintf( target, size, "%s", COMPONENTS_SETUP );
     runtime_components_run = 1;
+}
+
+/* A profile opts in for one 32-bit DLL already provided by this Wine prefix.
+ * The separate PE helper runs inside Wine before this game, since the native
+ * launcher cannot call the guest DLL's DllRegisterServer. */
+static int run_game_com32_first( char *target, size_t size )
+{
+    struct launcher_kv kv;
+    char settings_path[520], name[384], done[160];
+    USHORT machine;
+
+    if (runtime_components_run || target[1] == ':' || !strcasecmp( target, COM32_SETUP ) ||
+        !launcher_program_settings_path( RUNTIME_DIR, target, settings_path, sizeof(settings_path) ) ||
+        !launcher_kv_load( &kv, settings_path ) ||
+        !launcher_kv_get( &kv, "register-com32", name, sizeof(name) )) return 0;
+    if (!game_com32_valid_name( name ))
+    {
+        log_line( "[COM32] invalid DLL name in %s", settings_path );
+        return -1;
+    }
+    snprintf( done, sizeof(done), RUNTIME_DIR "/registry/com32-%.48s.done", name );
+    if (!access( done, F_OK )) return 0;
+    if (runtime_target_machine( target, &machine ) || machine != IMAGE_FILE_MACHINE_I386)
+    {
+        log_line( "[COM32] %s requires a 32-bit game executable", name );
+        return -1;
+    }
+    if (access( COM32_SETUP, F_OK ) || !envHasNextLoad() || !own_nro[0])
+    {
+        log_line( "[COM32] registration helper or restart handoff unavailable for %s", name );
+        return -1;
+    }
+    if (!write_line( COM32_REQUEST, name ))
+    {
+        log_line( "[COM32] cannot write registration request for %s", name );
+        return -1;
+    }
+    if (!write_line( RUNTIME_DIR "/run-next.txt", target ))
+    {
+        remove( COM32_REQUEST );
+        log_line( "[COM32] cannot save game handoff for %s", name );
+        return -1;
+    }
+    snprintf( runtime_com32_name, sizeof(runtime_com32_name), "%.48s", name );
+    snprintf( target, size, "%s", COM32_SETUP );
+    runtime_com32_run = 1;
+    log_line( "[COM32] registering %s before game launch", name );
+    return 1;
 }
 
 static int return_to_launcher( void )
@@ -3799,6 +3852,22 @@ static int return_to_launcher( void )
         write_line( COMPONENTS_DONE, done );
         log_line( wine_nx_program_exit_code ? "[SETUP] Windows components set up, but a step failed (%s)"
                                             : "[SETUP] Windows components set up (%s)", done );
+    }
+    if (runtime_com32_run)
+    {
+        char done[160];
+        int ok = wine_nx_program_exit_code == 0;
+
+        snprintf( done, sizeof(done), RUNTIME_DIR "/registry/com32-%s.done", runtime_com32_name );
+        if (ok) ok = write_line( done, "registered by autorun-register-com32.exe" );
+        remove( COM32_REQUEST );
+        if (!ok)
+        {
+            remove( RUNTIME_DIR "/run-next.txt" );
+            log_line( "[COM32] registration failed for %s (exit 0x%x); game launch stopped",
+                      runtime_com32_name, wine_nx_program_exit_code );
+        }
+        else log_line( "[COM32] registered %s; resuming game", runtime_com32_name );
     }
     /* A program waiting in run-next.txt (after the components setup) is started
      * by the runtime started again, whether or not the launcher would be. */
@@ -4315,6 +4384,10 @@ int main( int argc, char **argv )
     }
 
     run_components_first( target, sizeof(target) );
+    if (run_game_com32_first( target, sizeof(target) ) < 0)
+    {
+        leave_cleanly(); return 1;
+    }
 
     /* From here a thread may be asked to end; this one comes back here. */
     if (setjmp( quit_jump )) return return_to_launcher();

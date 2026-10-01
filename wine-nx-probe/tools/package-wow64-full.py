@@ -164,6 +164,13 @@ subprocess.run([str(toolchain / 'i686-w64-mingw32-clang'), '-Os', '-Wall', '-Wex
                 '-lole32', '-ladvapi32', '-lkernel32', '-lntdll'], check=True)
 assert 'Arch: i386\n' in readobj('--file-headers', autorun_setup)
 
+com32_setup = stage / 'drive_c/windows/autorun-register-com32.exe'
+subprocess.run([str(toolchain / 'i686-w64-mingw32-clang'), '-Os', '-Wall', '-Wextra', '-Werror',
+                '-fno-builtin', '-nostdlib', '-Wl,--entry,_start@0', '-Wl,--image-base,0x10000000',
+                '-Wl,--dynamicbase', '-o', str(com32_setup), str(tools / 'autorun_register_com32.c'),
+                '-lkernel32', '-lntdll'], check=True)
+assert 'Arch: i386\n' in readobj('--file-headers', com32_setup)
+
 # The Sims 2 Ultimate Collection is shipped installed; what is left is telling
 # the game where each of its packs is, which its release does with a batch file
 # of reg add lines whose every path comes from the folder it is run in.

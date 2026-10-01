@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 from zipfile import ZipFile, ZipInfo, ZIP_DEFLATED
 
 PROBE = Path(__file__).resolve().parents[1]
-SETTINGS = set('title d3d d3d9 own-controls controller verbose profile window-fit sdl-audio sd-stat-cache sd-clean-writer-cache locale wined3d-renderer wined3d-frontbuffer-swap wined3d-explicit-buffer-flush wined3d-csmt pal3-black-overlay-skip pal3-movie-center d7vk-offscreen-opengl d7vk-biko3-patches vulkan-fs-hack-rgba-view ensure-game-dir registry-install-dir '
+SETTINGS = set('title d3d d3d9 own-controls controller verbose profile window-fit sdl-audio sd-stat-cache sd-clean-writer-cache locale wined3d-renderer wined3d-frontbuffer-swap wined3d-explicit-buffer-flush wined3d-csmt pal3-black-overlay-skip pal3-movie-center d7vk-offscreen-opengl d7vk-biko3-patches vulkan-fs-hack-rgba-view ensure-game-dir registry-install-dir register-com32 '
                'aspect-fit touch-coordinates left-stick-run left-stick-eight-way left-stick-aim left-stick-move '
                'windows dxvk-version vkd3d-version dxvk-hud frame-limit vsync address-space'.split())
 PAL3_RAW_FILES = {
@@ -116,6 +116,11 @@ def defaults(root, relative, allowed, min_api=0):
                     any(ord(c) >= 127 for c in value)):
                 raise ValueError('registry-install-dir requires an ASCII Software subkey')
             replacement_path('game', value)
+        if key == 'register-com32':
+            if min_api < 19:
+                raise ValueError('register-com32 requires profile API 19')
+            if not re.fullmatch(r'[a-z0-9_-]{1,44}\.dll', value):
+                raise ValueError('register-com32 requires a lowercase DLL basename')
         if key in {'tup', 'tdown', 'tleft', 'tright'} and min_api < 17:
             raise ValueError('finger direction mappings require profile API 17')
         found.add(key)

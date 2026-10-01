@@ -1,0 +1,3 @@
+d3d=dxvk
+controller=keyboard
+register-com32=dinput8.dll

@@ -1,0 +1,1 @@
+This file only makes the RUNE/311240 directory exist before the first game launch.

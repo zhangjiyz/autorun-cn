@@ -47,6 +47,8 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
     assert b'click:' not in entries['pal3a/keys.txt']
     assert b'ensure-game-dir=Data/catalog\n' in entries['biko3/settings.txt']
     assert b'registry-install-dir=Software/illusion/Bikou3_DVD\n' in entries['biko3/settings.txt']
+    assert b'register-com32=dinput8.dll\n' in entries['zero-time-dilemma/settings.txt']
+    assert not any(b'Register-DInput.exe' in data for name, data in entries.items() if name.endswith('files.tsv'))
     assert entries['biko3/keys.txt'] == (PROBE / 'profiles/biko3/Biko_DVD.keys.txt').read_bytes()
     assert entries['biko3/cover.png'] == (PROBE / 'profiles/biko3/cover.png').read_bytes()
     assert entries['biko3/files/0.bin'] == (PROBE / 'profiles/biko3/ddraw.dll').read_bytes()
@@ -113,7 +115,8 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
                     lambda d: next(p for p in d['profiles'] if p['id'] == 'newpalxp').update(min_api=11),
                     lambda d: next(p for p in d['profiles'] if p['id'] == 'dmc4-dx9').update(min_api=13),
                     lambda d: next(p for p in d['profiles'] if p['id'] == 'biko3').update(min_api=15),
-                    lambda d: next(p for p in d['profiles'] if p['id'] == 'biko3').update(min_api=17)):
+                    lambda d: next(p for p in d['profiles'] if p['id'] == 'biko3').update(min_api=17),
+                    lambda d: next(p for p in d['profiles'] if p['id'] == 'zero-time-dilemma').update(min_api=18)):
         broken = json.loads(json.dumps(data)); mutator(broken)
         fixture = maintenance / 'catalog.json'; fixture.write_text(json.dumps(broken))
         try:
@@ -141,6 +144,15 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
         except ValueError: pass
         else: raise AssertionError(f'unsafe registry key accepted: {unsafe}')
     biko_settings.write_text(original_settings)
+    com32_settings = maintenance / 'zero-time-dilemma/Zero Escape.wine-nx.txt'
+    original_com32 = com32_settings.read_text()
+    for unsafe in ('../dinput8.dll', 'C:/dinput8.dll', 'DINPUT8.dll', 'dinput8.DLL', 'foo.bar.dll',
+                   'a' * 45 + '.dll'):
+        com32_settings.write_text(original_com32.replace('dinput8.dll', unsafe))
+        try: pack.build(maintenance / 'catalog.json', root / 'bad-com32-output.zip')
+        except ValueError: pass
+        else: raise AssertionError(f'unsafe COM DLL name accepted: {unsafe}')
+    com32_settings.write_text(original_com32)
 
     common = [os.environ.get('CC', 'cc'), '-std=gnu11', '-Wall', '-Wextra', '-Werror',
               '-O1', '-g', '-fsanitize=undefined', '-fno-omit-frame-pointer', '-I' + str(PROBE / 'source')]
@@ -153,6 +165,12 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
     run(*common, '-D__WINESRC__', '-D_WIN64', '-DWINE_UNIX_LIB', '-I' + str(PROBE.parent / 'include'),
         PROBE / 'tests/game_registry.c', *(['-liconv'] if os.uname().sysname == 'Darwin' else []), '-o', registry_test)
     run(registry_test)
+    com32_test = root / 'game-com32-profile'
+    com32_zip = root / 'zero-time-dilemma.zip'
+    pack.build(PROBE / 'profiles/catalog.json', com32_zip, selected='zero-time-dilemma')
+    run(*common, PROBE / 'tests/game_com32_profile.c', PROBE / 'source/game_cheats.c',
+        *flags('minizip', 'libpng', 'openssl'), '-lz', '-o', com32_test)
+    run(com32_test, com32_zip)
     swordman_zip = root / 'swordman.zip'
     pack.build(PROBE / 'profiles/catalog.json', swordman_zip, selected='swordman')
     swordman_test = root / 'swordman-profile'
@@ -240,7 +258,8 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
     run(core, valid, *bad)
     # v21 packages remain readable by the new runtime.
     legacy = json.loads(json.dumps(data)); legacy['schema'] = 1
-    legacy['profiles'] = [entry for entry in legacy['profiles'] if entry['id'] not in ('biko3', 'swordman')]
+    legacy['profiles'] = [entry for entry in legacy['profiles']
+                          if entry['id'] not in ('biko3', 'swordman', 'zero-time-dilemma')]
     for entry in legacy['profiles']:
         entry.pop('cheats', None); entry.pop('cover', None); entry.pop('binary_patch', None)
         entry.pop('raw_files', None); entry.pop('disable_file', None); entry.pop('files', None); entry['min_api'] = 1
