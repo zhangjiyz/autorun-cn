@@ -64,6 +64,20 @@
       "versions": [
         "Version 6.21"
       ]
+    },
+    {
+      "file": "mingliu.ttc",
+      "source": "local-user-files:Thunderbolt Legend/工具攻略/繁体版游戏文字显示不全和过粗解决方案/方案2（次推荐）/mingliu.ttc",
+      "size": 27506260,
+      "sha256": "7040631880be2e6206ac6ddb40d72ab10fc34542a07a2ed0a2005b71ff8d9cce",
+      "families": [
+        "MingLiU",
+        "PMingLiU",
+        "MingLiU_HKSCS"
+      ],
+      "versions": [
+        "Version 7.01"
+      ]
     }
   ]
 }

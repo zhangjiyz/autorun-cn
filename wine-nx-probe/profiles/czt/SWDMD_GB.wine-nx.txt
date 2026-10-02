@@ -1,0 +1,4 @@
+title=轩辕剑外传：苍之涛
+d3d=dxvk
+aspect-fit=800x600
+locale=zh_CN.UTF-8

@@ -9,10 +9,11 @@
 | `msyh.ttc` | 微软雅黑 / Microsoft YaHei UI | 6.23 |
 | `msyhbd.ttc` | 微软雅黑 / Microsoft YaHei UI 粗体 | 6.23 |
 | `msyhl.ttc` | Microsoft YaHei Light / UI Light | 6.21 |
+| `mingliu.ttc` | 細明體 / 新細明體 / MingLiU_HKSCS | 7.01 |
 
 字体于 2026-09-26 从 Microsoft 字体服务下载，原文件共 79,868,052 字节。
 来源目录为 <https://fs.microsoft.com/fs/windows/fontset-2017-04.json>；
-每个文件的下载地址、大小和 SHA-256 见 `windows-fonts.json`。
+2026-10-03 另加入用户本地《霹雳奇侠传》资料中的 `mingliu.ttc` 原文件，27,506,260 字节；内部字族名称已核对。每个文件的来源、大小和 SHA-256 见 `windows-fonts.json`。
 字体版权及文件内嵌信息归原权利人所有，不适用 Wine 的 LGPL 许可证。
 
 主工程 CI 的 `all` 模式经 `package-amd64.py` 将本目录的 `.ttf` 和 `.ttc`

@@ -147,6 +147,30 @@
       ]
     },
     {
+      "id": "swd4",
+      "name": "轩辕剑肆",
+      "version": 1,
+      "min_api": 5,
+      "keywords": "轩辕剑肆 轩辕剑四 軒轅劍肆 軒轅劍四 SWD4 XuanYuan Sword IV",
+      "description": "根目录 swd4.exe 测试；参考苍之涛的 DXVK、800x600 与按键，附 600×900 封面；简体环境与精确哈希字体补丁统一宋体并关闭绘字抗锯齿，对话字体已真机验证，其余兼容性待测试。",
+      "settings": "swd4/swd4.wine-nx.txt",
+      "keys": "swd4/swd4.keys.txt",
+      "binary_patch": "swd4/binary-patch.json",
+      "cover": "swd4/cover.png"
+    },
+    {
+      "id": "czt",
+      "name": "轩辕剑外传：苍之涛",
+      "version": 1,
+      "min_api": 5,
+      "keywords": "苍之涛 蒼之濤 轩辕剑外传 SWDMD_GB SWDMD CZT",
+      "description": "用于根目录 SWDMD_GB.EXE；DXVK、800x600、原按键与600×900封面；简体环境及精确哈希字体补丁统一宋体并关闭绘字抗锯齿，待真机测试。",
+      "settings": "czt/SWDMD_GB.wine-nx.txt",
+      "keys": "czt/SWDMD_GB.keys.txt",
+      "binary_patch": "czt/binary-patch.json",
+      "cover": "czt/cover.png"
+    },
+    {
       "id": "dmc4-dx9",
       "name": "鬼泣4",
       "version": 1,
