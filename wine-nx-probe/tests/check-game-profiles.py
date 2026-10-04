@@ -18,6 +18,15 @@ spec = importlib.util.spec_from_file_location('package_profiles', PROBE / 'tools
 pack = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(pack)
 
+# Combined archives exercise parser/rollback fixtures, not release downloads.
+# Keep only the profiles referenced by those tests so adding independent games
+# cannot push a test-only aggregate over the per-download 16 MiB limit.
+COMBINED_PROFILE_IDS = {
+    'newpal-steam', 'newpalxp', 'pal2', 'pal3', 'pal3a',
+    'zhaoyunzhuan', 'zhaoyunzhuan2', 'swordman', 'biko3',
+    'zero-time-dilemma', 'dmc4-dx9',
+}
+
 
 def run(*args):
     subprocess.run([str(arg) for arg in args], check=True)
@@ -29,10 +38,18 @@ def flags(*packages):
 
 with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
     root = Path(directory).resolve()
+    maintenance = root / 'maintenance'
+    shutil.copytree(PROBE / 'profiles', maintenance)
+    all_data = json.loads((PROBE / 'profiles/catalog.json').read_text())
+    data = dict(all_data, profiles=[entry for entry in all_data['profiles']
+                                   if entry['id'] in COMBINED_PROFILE_IDS])
+    assert {entry['id'] for entry in data['profiles']} == COMBINED_PROFILE_IDS
+    combined_catalog = maintenance / 'catalog.json'
+    combined_catalog.write_text(json.dumps(data))
     valid = root / 'valid.zip'
-    assert pack.build(PROBE / 'profiles/catalog.json', valid) >= 2
+    assert pack.build(combined_catalog, valid) == len(COMBINED_PROFILE_IDS)
     repeat = root / 'repeat.zip'
-    pack.build(PROBE / 'profiles/catalog.json', repeat)
+    pack.build(combined_catalog, repeat)
     assert valid.read_bytes() == repeat.read_bytes(), 'profile packaging must be reproducible'
     with ZipFile(valid) as archive:
         entries = {name: archive.read(name) for name in archive.namelist()}
@@ -101,9 +118,6 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
     link = ZipInfo('newpal-steam/keys.txt'); link.create_system = 3; link.external_attr = 0o120777 << 16
     invalid('symlink', [(link if name == 'newpal-steam/keys.txt' else name, data) for name, data in entries.items()])
     # Test mapping maintenance errors before any artifact is emitted.
-    maintenance = root / 'maintenance'
-    shutil.copytree(PROBE / 'profiles', maintenance)
-    data = json.loads((PROBE / 'profiles/catalog.json').read_text())
     for mutator in (lambda d: d['profiles'][0].update(version=0),
                     lambda d: d['profiles'][0].update(id='../bad'),
                     lambda d: d['profiles'][0].update(name='a\tb'),
@@ -352,12 +366,12 @@ with tempfile.TemporaryDirectory(prefix='autorun-profile-tests-') as directory:
 
     runtime = root / 'runtime'; (runtime / 'profiles').mkdir(parents=True)
     pack.build_release(PROBE / 'profiles/catalog.json', runtime / 'profiles')
-    versions = {profile['id']: profile['version'] for profile in data['profiles']}
+    versions = {profile['id']: profile['version'] for profile in all_data['profiles']}
     base_version = versions['newpal-steam']
     other_version = versions['zhaoyunzhuan']
     # Start with no source file to test the new default management UI.
     updated = root / 'updated'
-    newer = json.loads(json.dumps(data)); newer['profiles'][0]['version'] += 1
+    newer = json.loads(json.dumps(all_data)); newer['profiles'][0]['version'] += 1
     (maintenance / 'catalog.json').write_text(json.dumps(newer))
     pack.build_release(maintenance / 'catalog.json', updated)
     prompt_input = root / 'prompt-input'

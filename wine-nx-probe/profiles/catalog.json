@@ -115,6 +115,84 @@
       ]
     },
     {
+      "id": "youcity",
+      "name": "幽城幻剑录",
+      "version": 1,
+      "min_api": 17,
+      "keywords": "幽城幻剑录 幽城幻劍錄 天地劫 Castle RPG Youcheng Youcity",
+      "description": "适用于已核对的471040字节RPG.exe；含定时器补丁、原版BASS展开库、cnc-ddraw、4:3居中、右键返回和600×900无价格封面；最终输入及存读档待真机验收。",
+      "settings": "youcity/RPG.wine-nx.txt",
+      "keys": "youcity/RPG.keys.txt",
+      "binary_patch": "youcity/binary-patch.json",
+      "cover": "youcity/cover.png",
+      "files": [
+        {
+          "root": "game",
+          "path": "Bass.dll",
+          "source": "youcity/Bass.dll"
+        },
+        {
+          "root": "game",
+          "path": "ddraw.dll",
+          "source": "swordman/ddraw.dll"
+        },
+        {
+          "root": "game",
+          "path": "ddraw.ini",
+          "source": "youcity/ddraw.ini"
+        },
+        {
+          "root": "game",
+          "path": "RPG.box64.txt",
+          "source": "youcity/RPG.box64.txt"
+        },
+        {
+          "root": "game",
+          "path": "cnc-ddraw.LICENSE",
+          "source": "swordman/cnc-ddraw.LICENSE"
+        }
+      ]
+    },
+    {
+      "id": "huanshen",
+      "name": "寰神结",
+      "version": 1,
+      "min_api": 17,
+      "keywords": "寰神结 寰神結 天地劫外传 Nascence RPG Huanshen",
+      "description": "适用于已核对的简体中文版RPG.exe；含定时器补丁、BASS展开库、cnc-ddraw、4:3居中、按键和600×900无价格封面；已补简体系统语言设置，后续启动及玩法待真机验收。",
+      "settings": "huanshen/RPG.wine-nx.txt",
+      "keys": "huanshen/RPG.keys.txt",
+      "binary_patch": "huanshen/binary-patch.json",
+      "cover": "huanshen/cover.png",
+      "files": [
+        {
+          "root": "game",
+          "path": "Bass.dll",
+          "source": "huanshen/Bass.dll"
+        },
+        {
+          "root": "game",
+          "path": "ddraw.dll",
+          "source": "swordman/ddraw.dll"
+        },
+        {
+          "root": "game",
+          "path": "ddraw.ini",
+          "source": "huanshen/ddraw.ini"
+        },
+        {
+          "root": "game",
+          "path": "RPG.box64.txt",
+          "source": "huanshen/RPG.box64.txt"
+        },
+        {
+          "root": "game",
+          "path": "cnc-ddraw.LICENSE",
+          "source": "swordman/cnc-ddraw.LICENSE"
+        }
+      ]
+    },
+    {
       "id": "biko3",
       "name": "尾行3",
       "version": 1,

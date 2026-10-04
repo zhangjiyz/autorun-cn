@@ -34,6 +34,7 @@
 ## 配置和发布约定
 
 - 默认仓库为 CNB `PalmMuse/autorun-cn`。
+- 今后新增的适配包默认在单游戏 `.wine-nx.txt` 中显式加入 `locale=zh_CN.UTF-8`，使用简体中文系统语言和 ANSI 代码页；游戏明确需要其他语言环境时单独覆盖。此约定不要求批量修改既有适配包或更改主程序全局默认值。
 - Release 构建读取最新正式 Release；Debug 构建使用固定测试标签，默认 `profile-debug`，也可由 `--profile-tag` 指定。
 - 正式发布时才按维护者要求递增适配包版本。固定测试标签允许替换同版本包；手动选择适配包允许重装同版本，自动更新仍只接受更高版本。
 - 适配包先上传独立游戏 ZIP，最后上传 `autorun-profiles.tsv`。不要把测试 Release 设成 Latest。
